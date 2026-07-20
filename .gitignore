@@ -1,0 +1,10 @@
+# Runtime state: SQLite DB file and its WAL sidecars (ADR 0003). Created on first run.
+/data/
+
+# Compiled binaries
+/life-ledger
+/life-ledger.exe
+/bin/
+
+# Go test/coverage artifacts
+*.out
