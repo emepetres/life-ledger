@@ -19,13 +19,13 @@
 
   <div class="wrap">
     <div class="shell">
-      <section class="entry" aria-label="Quick add">
-        <h2>Quick add</h2>
-        <form method="post" action="/add" autocomplete="off">
+      <section class="entry{{ if .Editing }} editing{{ end }}" aria-label="Quick add">
+        <h2>{{ if .Editing }}Edit expense{{ else }}Quick add{{ end }}</h2>
+        <form method="post" action="{{ .FormAction }}" autocomplete="off">
           <input class="qa-input" type="text" name="raw" value="{{ .Raw }}"
                  placeholder="12.50 lunch @work *  -1" aria-label="Expense entry" autofocus
                  hx-post="/preview" hx-trigger="input changed delay:150ms, load"
-                 hx-target="#preview" hx-swap="innerHTML">
+                 hx-target="#preview" hx-swap="innerHTML"{{ if .Editing }} hx-vals='{"edit": "1"}'{{ end }}>
           <div id="preview">
             {{ template "preview" .Preview }}
           </div>
@@ -60,8 +60,10 @@
     <div class="cell-acct">{{ template "account" . }}</div>
     <div class="cell-split">{{ if .Split }}<span class="badge split">½</span>{{ end }}</div>
     <div class="acts">
-      <button class="ghost" type="button" disabled>edit</button>
-      <button class="ghost danger" type="button" disabled>delete</button>
+      <a class="ghost" href="/edit/{{ .ID }}">edit</a>
+      <form method="post" action="/delete/{{ .ID }}">
+        <button class="ghost danger" type="submit">delete</button>
+      </form>
     </div>
   </div>
   {{ end }}
@@ -90,6 +92,7 @@
 <div class="gate-ok">✓ ready</div>
 {{ end }}
 <div class="btnrow">
-  <button class="primary" type="submit"{{ if .DisableSave }} disabled{{ end }}>Add</button>
+  <button class="primary" type="submit"{{ if .DisableSave }} disabled{{ end }}>{{ if .Editing }}Save changes{{ else }}Add{{ end }}</button>
+  {{ if .Editing }}<a class="ghost cancel" href="/">Cancel</a>{{ end }}
 </div>
 {{ end }}

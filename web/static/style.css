@@ -58,6 +58,9 @@ h1 { font-size: 18px; margin: 0; }
   box-shadow: 0 1px 3px rgba(0, 0, 0, .05);
 }
 .entry h2 { margin: 0 0 10px; font-size: 14px; }
+/* Edit mode: highlight the quick-add rail so it's clear the box is editing an
+   existing expense in place rather than adding a new one. */
+.entry.editing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .qa-input {
   width: 100%; padding: 13px 14px;
   border: 1.5px solid var(--line); border-radius: 10px;
@@ -70,12 +73,13 @@ button.primary {
   padding: 10px 16px; border-radius: 10px; font-weight: 600; cursor: pointer;
 }
 button.primary:hover { background: #275e43; }
-button.ghost {
+.ghost {
   background: transparent; border: 1px solid var(--line); border-radius: 8px;
   padding: 5px 10px; cursor: pointer; color: var(--muted);
+  font: inherit; text-decoration: none; display: inline-flex; align-items: center;
 }
-button.ghost:hover { color: var(--ink); border-color: #cbd0d6; }
-button.ghost.danger:hover { color: var(--danger); border-color: #f0c6c6; }
+.ghost:hover { color: var(--ink); border-color: #cbd0d6; }
+.ghost.danger:hover { color: var(--danger); border-color: #f0c6c6; }
 .hint { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 12px; }
 .gate-bad { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
 .gate-ok { color: var(--accent); font-size: 12.5px; margin-top: 8px; }
@@ -126,6 +130,9 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .cell-split { text-align: center; }
 .row .acts { display: flex; gap: 4px; justify-content: flex-end; opacity: 0; transition: opacity .1s; }
 .row:hover .acts { opacity: 1; }
+/* The delete control is a form (for a no-JS POST); let its button sit directly
+   in the .acts flex row beside the edit link. */
+.row .acts form { display: contents; }
 
 .empty { color: var(--muted); padding: 16px; text-align: center; }
 

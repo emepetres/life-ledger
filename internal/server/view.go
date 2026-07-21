@@ -13,7 +13,15 @@ type homeView struct {
 	// HTMXSrc is the local URL of the vendored, version-pinned htmx script.
 	HTMXSrc string
 	// Raw is the submitted line echoed back so a rejected entry stays in the box.
+	// In edit mode it is pre-filled with the edited row's original raw_text.
 	Raw string
+	// FormAction is where the quick-add form posts: "/add" normally, or
+	// "/edit/{id}" while editing that row in place.
+	FormAction string
+	// Editing is true when the quick-add box is editing an existing expense
+	// rather than adding a new one. It highlights the form, relabels the save
+	// control, and reveals the cancel affordance.
+	Editing bool
 	// Preview is the live-preview fragment rendered inline for the current Raw,
 	// so a no-JS load (and a save-gate rejection) shows the same preview htmx
 	// would swap in. It is non-interactive here — the save control stays enabled
@@ -49,15 +57,22 @@ type previewView struct {
 	// for interactive (htmx) renders so a no-JS page keeps the control usable and
 	// leans on the server-side gate.
 	DisableSave bool
+	// Editing relabels the save control ("Save changes" vs "Add") and reveals the
+	// cancel affordance. It travels on the preview because the save control lives
+	// in the swapped-in fragment, so live /preview swaps during an edit must keep
+	// the edit-mode label rather than reverting to "Add".
+	Editing bool
 }
 
 // buildPreview turns a parsed entry into the preview fragment's view model. When
 // interactive (an htmx /preview swap), the save control is disabled for a blank
 // or invalid entry; on the inline home render it is left enabled so a no-JS
-// submit still reaches the server-side save gate.
-func buildPreview(raw string, p expense.ParsedExpense, interactive bool) previewView {
+// submit still reaches the server-side save gate. editing relabels the save
+// control and reveals the cancel affordance, carried through so live swaps during
+// an edit keep the edit-mode chrome.
+func buildPreview(raw string, p expense.ParsedExpense, interactive, editing bool) previewView {
 	if strings.TrimSpace(raw) == "" {
-		return previewView{Empty: true, DisableSave: interactive}
+		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
 	}
 	account, isDefault := accountChip(p.Account)
 	v := previewView{
@@ -68,6 +83,7 @@ func buildPreview(raw string, p expense.ParsedExpense, interactive bool) preview
 		AccountDefault: isDefault,
 		Split:          p.Split,
 		Errors:         errorMessages(p.Errors),
+		Editing:        editing,
 	}
 	if p.HasAmount {
 		v.Amount = formatEuro(p.Amount)
@@ -101,6 +117,9 @@ type dayGroup struct {
 // an account-less expense surfaces as "@personal" (AccountDefault true) rather
 // than blank, so the default account is visible and consistent everywhere.
 type rowView struct {
+	// ID is the stored expense's identity, threaded through so the row's edit and
+	// delete controls can target its id-scoped endpoints.
+	ID             int64
 	Amount         string // "€X.XX"
 	Description    string
 	Account        string // "@work", or "@personal" when defaulted
@@ -133,6 +152,7 @@ func groupByDay(expenses []expense.Expense) []dayGroup {
 		}
 		g := &groups[len(groups)-1]
 		g.Rows = append(g.Rows, rowView{
+			ID:             e.ID,
 			Amount:         formatEuro(e.Amount),
 			Description:    e.Description,
 			Account:        accountLabel(e.Account),

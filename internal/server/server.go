@@ -9,15 +9,18 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
 	"mime"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/emepetres/life-ledger/internal/expense"
+	"github.com/emepetres/life-ledger/internal/store"
 	"github.com/emepetres/life-ledger/web"
 )
 
@@ -29,12 +32,17 @@ func init() {
 }
 
 // Store is the persistence surface the server needs: list every expense
-// (newest-first, for day grouping) and create a new one. It is an interface so
-// the HTTP layer depends only on the behaviour it uses and tests can drive it
-// against a real temp-file store.
+// (newest-first, for day grouping), create one, load one back by id to edit,
+// update it in place, and delete it. It is an interface so the HTTP layer
+// depends only on the behaviour it uses and tests can drive it against a real
+// temp-file store. Get, Update, and Delete report store.ErrNotFound for an
+// unknown id, which the handlers translate to a 404.
 type Store interface {
 	List(ctx context.Context) ([]expense.Expense, error)
 	Create(ctx context.Context, e *expense.Expense) error
+	Get(ctx context.Context, id int64) (expense.Expense, error)
+	Update(ctx context.Context, e *expense.Expense) error
+	Delete(ctx context.Context, id int64) error
 }
 
 // Server holds the wired dependencies shared by all handlers.
@@ -106,15 +114,26 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// Add an expense: parse, re-validate the save gate server-side, persist.
 	mux.HandleFunc("POST /add", s.handleAdd)
 
+	// Edit an expense in place: GET loads its raw_text back into the quick-add
+	// box (edit mode); POST re-validates the save gate and updates it, keeping the
+	// identity and refreshing updated_at. Both reuse the add path's parse +
+	// preview + save-gate machinery so editing behaves identically to adding.
+	mux.HandleFunc("GET /edit/{id}", s.handleEditForm)
+	mux.HandleFunc("POST /edit/{id}", s.handleEditSave)
+
+	// Delete an expense.
+	mux.HandleFunc("POST /delete/{id}", s.handleDelete)
+
 	// Home page. Registered last as the catch-all for "/" so unknown paths 404.
 	mux.HandleFunc("GET /{$}", s.handleHome)
 
 	return mux, nil
 }
 
-// handleHome renders the full page: the quick-add form and the day-grouped list.
+// handleHome renders the full page: the quick-add form (in add mode) and the
+// day-grouped list.
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	s.renderHome(w, r, http.StatusOK, "")
+	s.renderForm(w, r, http.StatusOK, "", addAction, false)
 }
 
 // handlePreview renders the live-preview fragment for the in-progress line. It
@@ -127,16 +146,22 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw := r.PostFormValue("raw")
+	// The quick-add box sends edit=1 while editing (via hx-vals) so a live swap
+	// keeps the "Save changes" label and cancel affordance instead of reverting
+	// to the add-mode "Add" control on every keystroke.
+	editing := r.PostFormValue("edit") != ""
 	parsed := expense.Parse(raw, s.now())
-	s.renderPartial(w, "preview", buildPreview(raw, parsed, true))
+	s.renderPartial(w, "preview", buildPreview(raw, parsed, true, editing))
 }
 
-// renderHome loads the list, groups it by day, and renders the home page with
-// the given status and quick-add form state (echoed raw line + inline preview).
-// Both the plain home view and the save-gate rejection render through here, so
-// the list/group/render path lives in one place. The inline preview is built
-// non-interactively so the save control stays enabled for a no-JS submit.
-func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, raw string) {
+// renderForm loads the list, groups it by day, and renders the home page with
+// the given status and quick-add form state: the echoed raw line, the inline
+// preview, and where the form posts (addAction, or an /edit/{id} action in edit
+// mode). Every full-page render — plain home, save-gate rejection, and the edit
+// form — flows through here, so the list/group/render path lives in one place.
+// The inline preview is built non-interactively so the save control stays
+// enabled for a no-JS submit.
+func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, raw, formAction string, editing bool) {
 	expenses, err := s.store.List(r.Context())
 	if err != nil {
 		log.Printf("listing expenses: %v", err)
@@ -145,10 +170,12 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	parsed := expense.Parse(raw, s.now())
 	s.render(w, status, homeView{
-		HTMXSrc: s.htmxSrc,
-		Raw:     raw,
-		Preview: buildPreview(raw, parsed, false),
-		Groups:  groupByDay(expenses),
+		HTMXSrc:    s.htmxSrc,
+		Raw:        raw,
+		FormAction: formAction,
+		Editing:    editing,
+		Preview:    buildPreview(raw, parsed, false, editing),
+		Groups:     groupByDay(expenses),
 	})
 }
 
@@ -167,7 +194,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 
 	parsed := expense.Parse(raw, s.now())
 	if !parsed.OK() {
-		s.renderHome(w, r, http.StatusUnprocessableEntity, raw)
+		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
 		return
 	}
 
@@ -178,6 +205,105 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// addAction is the quick-add form's action in add mode; edit mode swaps in an
+// "/edit/{id}" action built by editAction.
+const addAction = "/add"
+
+// editAction is the quick-add form's action when editing the given expense.
+func editAction(id int64) string {
+	return "/edit/" + strconv.FormatInt(id, 10)
+}
+
+// handleEditForm loads the expense's original raw_text back into the quick-add
+// box in edit mode, reusing the same inline preview + save gate as adding. An
+// unknown or non-numeric id is a 404.
+func (s *Server) handleEditForm(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	e, err := s.store.Get(r.Context(), id)
+	if respondStoreErr(w, r, "loading expense for edit", id, err) {
+		return
+	}
+	s.renderForm(w, r, http.StatusOK, e.RawText, editAction(id), true)
+}
+
+// handleEditSave re-parses the edited line, re-validates the save gate on the
+// server (so an entry that skipped the client is still refused), and updates the
+// expense in place — keeping its identity (id, created_at) and refreshing
+// updated_at (ADR-0001). On success it redirects home (Post/Redirect/Get); on a
+// save-gate violation it re-renders the form in edit mode at 422, changing
+// nothing; an unknown id is a 404.
+func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	raw := r.PostFormValue("raw")
+
+	parsed := expense.Parse(raw, s.now())
+	if !parsed.OK() {
+		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, editAction(id), true)
+		return
+	}
+
+	e := newExpense(parsed, raw)
+	e.ID = id
+	if respondStoreErr(w, r, "updating expense", id, s.store.Update(r.Context(), e)) {
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleDelete removes the expense, then redirects home (Post/Redirect/Get). An
+// unknown id is a 404.
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if respondStoreErr(w, r, "deleting expense", id, s.store.Delete(r.Context(), id)) {
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// respondStoreErr maps a store error on the id-scoped operations to an HTTP
+// response — store.ErrNotFound to a 404, any other error to a logged 500 — and
+// reports whether it wrote one, so the caller returns on true and proceeds on a
+// nil error. op names the operation in the 500 log. It gathers the identical
+// not-found/500 translation the edit and delete handlers would otherwise repeat.
+func respondStoreErr(w http.ResponseWriter, r *http.Request, op string, id int64, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+	default:
+		log.Printf("%s %d: %v", op, id, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+	return true
+}
+
+// parseID reads the {id} path segment as a positive int64, writing a 404 and
+// returning ok=false for a missing or non-numeric id so a bad URL never reaches
+// the store.
+func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return 0, false
+	}
+	return id, true
 }
 
 // newExpense turns a validated parse result into the record to store. The full
