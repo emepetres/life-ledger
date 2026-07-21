@@ -78,6 +78,18 @@ button.ghost:hover { color: var(--ink); border-color: #cbd0d6; }
 button.ghost.danger:hover { color: var(--danger); border-color: #f0c6c6; }
 .hint { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 12px; }
 .gate-bad { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
+.gate-ok { color: var(--accent); font-size: 12.5px; margin-top: 8px; }
+button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
+
+/* ---- live preview ---- */
+.preview.chips {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin-top: 10px; min-height: 26px;
+}
+.chip.amount { background: var(--accent-soft); color: var(--amount); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.date { background: #eef2f7; color: #334155; }
+.chip.desc { background: transparent; color: var(--ink); padding-left: 0; font-weight: 600; }
+.chip.muted { background: none; color: var(--muted); }
 
 /* ---- chips / badges ---- */
 .chip { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }

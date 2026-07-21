@@ -99,6 +99,10 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 		fmt.Fprintln(w, "ok")
 	})
 
+	// Live preview: parse the in-progress line and render the fragment htmx swaps
+	// into the quick-add box as the user types. Reuses the same parser as /add.
+	mux.HandleFunc("POST /preview", s.handlePreview)
+
 	// Add an expense: parse, re-validate the save gate server-side, persist.
 	mux.HandleFunc("POST /add", s.handleAdd)
 
@@ -110,24 +114,40 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 
 // handleHome renders the full page: the quick-add form and the day-grouped list.
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	s.renderHome(w, r, http.StatusOK, "", nil)
+	s.renderHome(w, r, http.StatusOK, "")
+}
+
+// handlePreview renders the live-preview fragment for the in-progress line. It
+// runs the same parser as the add path (the single source of parse truth), so
+// the preview shows exactly what would be stored, and disables the save control
+// on an invalid entry. Always answers 200 — a "bad" entry is a valid preview.
+func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	raw := r.PostFormValue("raw")
+	parsed := expense.Parse(raw, s.now())
+	s.renderPartial(w, "preview", buildPreview(raw, parsed, true))
 }
 
 // renderHome loads the list, groups it by day, and renders the home page with
-// the given status and quick-add form state (echoed raw line + error messages).
+// the given status and quick-add form state (echoed raw line + inline preview).
 // Both the plain home view and the save-gate rejection render through here, so
-// the list/group/render path lives in one place.
-func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, raw string, errs []string) {
+// the list/group/render path lives in one place. The inline preview is built
+// non-interactively so the save control stays enabled for a no-JS submit.
+func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, raw string) {
 	expenses, err := s.store.List(r.Context())
 	if err != nil {
 		log.Printf("listing expenses: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	parsed := expense.Parse(raw, s.now())
 	s.render(w, status, homeView{
 		HTMXSrc: s.htmxSrc,
 		Raw:     raw,
-		Errors:  errs,
+		Preview: buildPreview(raw, parsed, false),
 		Groups:  groupByDay(expenses),
 	})
 }
@@ -147,7 +167,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 
 	parsed := expense.Parse(raw, s.now())
 	if !parsed.OK() {
-		s.renderHome(w, r, http.StatusUnprocessableEntity, raw, errorMessages(parsed.Errors))
+		s.renderHome(w, r, http.StatusUnprocessableEntity, raw)
 		return
 	}
 
@@ -192,6 +212,21 @@ func (s *Server) render(w http.ResponseWriter, status int, data homeView) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
+	_, _ = buf.WriteTo(w)
+}
+
+// renderPartial executes a named template (an htmx fragment) into a buffer first
+// so a template error yields a clean 500 rather than a partially written body,
+// then writes it at 200.
+func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		log.Printf("rendering %s fragment: %v", name, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
 	_, _ = buf.WriteTo(w)
 }
 

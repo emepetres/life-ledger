@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/emepetres/life-ledger/internal/expense"
 )
@@ -13,10 +14,77 @@ type homeView struct {
 	HTMXSrc string
 	// Raw is the submitted line echoed back so a rejected entry stays in the box.
 	Raw string
-	// Errors are the user-facing save-gate messages for a rejected submission.
-	Errors []string
+	// Preview is the live-preview fragment rendered inline for the current Raw,
+	// so a no-JS load (and a save-gate rejection) shows the same preview htmx
+	// would swap in. It is non-interactive here — the save control stays enabled
+	// so a no-JS submit still reaches the server-side gate.
+	Preview previewView
 	// Groups is the list, newest day first, each with its rows and day total.
 	Groups []dayGroup
+}
+
+// previewView is the view model for the live-preview fragment: the resolved
+// fields shown as chips, the save-gate state, and whether the save control is
+// disabled. It is the single rendering of "what will be stored" reused by the
+// inline home render and the htmx /preview swaps.
+type previewView struct {
+	// Empty is true for a blank entry, shown as an unobtrusive placeholder.
+	Empty bool
+	// HasAmount gates the amount chip; Amount is "€X.XX" when present.
+	HasAmount bool
+	Amount    string
+	// DateLabel is the resolved date as a real date, e.g. "Fri 17 Jul" — never
+	// a "-N" offset or a raw token.
+	DateLabel string
+	// Description is the free text left after amount and markers are removed.
+	Description string
+	// Account is the "@tag" display, or "@personal" when omitted (AccountDefault).
+	Account        string
+	AccountDefault bool
+	// Split gates the "½ split" badge; true only when a standalone '*' is present.
+	Split bool
+	// Errors are the user-facing save-gate fix messages; empty means ready.
+	Errors []string
+	// DisableSave disables the save control when the entry is invalid. Set only
+	// for interactive (htmx) renders so a no-JS page keeps the control usable and
+	// leans on the server-side gate.
+	DisableSave bool
+}
+
+// buildPreview turns a parsed entry into the preview fragment's view model. When
+// interactive (an htmx /preview swap), the save control is disabled for a blank
+// or invalid entry; on the inline home render it is left enabled so a no-JS
+// submit still reaches the server-side save gate.
+func buildPreview(raw string, p expense.ParsedExpense, interactive bool) previewView {
+	if strings.TrimSpace(raw) == "" {
+		return previewView{Empty: true, DisableSave: interactive}
+	}
+	account, isDefault := accountChip(p.Account)
+	v := previewView{
+		HasAmount:      p.HasAmount,
+		DateLabel:      p.Date.Format(dayLabelLayout),
+		Description:    p.Description,
+		Account:        account,
+		AccountDefault: isDefault,
+		Split:          p.Split,
+		Errors:         errorMessages(p.Errors),
+	}
+	if p.HasAmount {
+		v.Amount = formatEuro(p.Amount)
+	}
+	if interactive {
+		v.DisableSave = !p.OK()
+	}
+	return v
+}
+
+// accountChip is the "@tag" display for the parser's account string: the stored
+// tag when present, or the "@personal" default when blank (never shown blank).
+func accountChip(account string) (label string, isDefault bool) {
+	if account == "" {
+		return "@personal", true
+	}
+	return "@" + account, false
 }
 
 // dayGroup is one day's worth of rows under a per-day header.
