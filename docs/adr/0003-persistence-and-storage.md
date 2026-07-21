@@ -41,7 +41,7 @@ Schema is managed by **versioned migrations embedded in the binary** (`pressly/g
 
 **Unified startup path (identical locally and on Azure):** on boot the app opens the DB file at a configured path, **creating it if absent**, applies any pending migrations, then serves. First run locally creates `./data/expenses.db`; first run on Azure does the identical thing against the volume-mounted path. No separate provisioning or seed step.
 
-Two pragmas are set at connection open, regardless: `journal_mode=WAL` (better concurrency and resilience — this is what makes the volume-mounted single-writer story robust) and `foreign_keys=ON` (harmless now, the correct default for when a second table arrives).
+Two pragmas are set at connection open, regardless: `journal_mode=WAL` (better concurrency and resilience — this is what makes the volume-mounted single-writer story robust) and `foreign_keys=ON` (harmless now, the correct default for when a second table arrives). A third, `busy_timeout=5000`, accompanies them: it tells a connection to wait briefly for a momentary write lock rather than failing immediately with `SQLITE_BUSY`, which is the practical companion to WAL that keeps the single-writer story robust under overlapping requests.
 
 ## Driver
 
