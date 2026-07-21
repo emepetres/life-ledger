@@ -427,21 +427,24 @@ func (s *Server) renderTemplate(w http.ResponseWriter, status int, name string, 
 	_, _ = buf.WriteTo(w)
 }
 
+// saveGateMessages is the user-facing wording for each save-gate violation,
+// kept here in the presentation layer (the parser holds only terse messages).
+var saveGateMessages = map[expense.ParseError]string{
+	expense.ErrNoAmount:         "needs an amount",
+	expense.ErrEmptyDescription: "needs a description",
+	expense.ErrTwoDateTokens:    "two dates",
+	expense.ErrTwoAccounts:      "two @accounts",
+}
+
 // errorMessages maps the parser's save-gate violations to the user-facing
-// wording surfaced in the form.
+// wording surfaced in the form, falling back to the terse message for any
+// unrecognised code.
 func errorMessages(errs []expense.ParseError) []string {
 	msgs := make([]string, 0, len(errs))
 	for _, e := range errs {
-		switch e {
-		case expense.ErrNoAmount:
-			msgs = append(msgs, "needs an amount")
-		case expense.ErrEmptyDescription:
-			msgs = append(msgs, "needs a description")
-		case expense.ErrTwoDateTokens:
-			msgs = append(msgs, "two dates")
-		case expense.ErrTwoAccounts:
-			msgs = append(msgs, "two @accounts")
-		default:
+		if m, ok := saveGateMessages[e]; ok {
+			msgs = append(msgs, m)
+		} else {
 			msgs = append(msgs, e.Error())
 		}
 	}

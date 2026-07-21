@@ -1,67 +1,91 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Life Ledger</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <!-- htmx loaded from a single vendored, version-pinned local asset (no CDN). -->
-  <script src="{{ .HTMXSrc }}" defer></script>
-</head>
-<body>
-  <header class="app-header">
-    <div class="logo">£</div>
-    <div>
-      <h1>Life Ledger</h1>
-      <div class="sub">Personal expense register</div>
-    </div>
-    <form class="logout" method="post" action="/logout">
-      <button class="ghost" type="submit">Log out</button>
-    </form>
-  </header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Life Ledger</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <!-- htmx loaded from a single vendored, version-pinned local asset (no CDN). -->
+    <script src="{{ .HTMXSrc }}" defer></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="logo">£</div>
+      <div>
+        <h1>Life Ledger</h1>
+        <div class="sub">Personal expense register</div>
+      </div>
+      <form class="logout" method="post" action="/logout">
+        <button class="ghost" type="submit">Log out</button>
+      </form>
+    </header>
 
-  <div class="wrap">
-    <div class="shell">
-      <section class="entry{{ if .Editing }} editing{{ end }}" aria-label="Quick add">
-        <h2>{{ if .Editing }}Edit expense{{ else }}Quick add{{ end }}</h2>
-        <form method="post" action="{{ .FormAction }}" autocomplete="off">
-          <input class="qa-input" type="text" name="raw" value="{{ .Raw }}"
-                 placeholder="12.50 lunch @work *  -1" aria-label="Expense entry" autofocus
-                 hx-post="/preview" hx-trigger="input changed delay:150ms, load"
-                 hx-target="#preview" hx-swap="innerHTML"{{ if .Editing }} hx-vals='{"edit": "1"}'{{ end }}>
-          <div id="preview">
-            {{ template "preview" .Preview }}
-          </div>
-        </form>
-        <p class="hint">amount first · <b>@account</b> · <b>*</b> half · <b>-N</b> days ago · <b>DD/MM</b></p>
-      </section>
+    <div class="wrap">
+      <div class="shell">
+        <section
+          class="entry{{ if .Editing }} editing{{ end }}"
+          aria-label="Quick add"
+        >
+          <h2>{{ if .Editing }}Edit expense{{ else }}Quick add{{ end }}</h2>
+          <form method="post" action="{{ .FormAction }}" autocomplete="off">
+            <input
+              class="qa-input"
+              type="text"
+              name="raw"
+              value="{{ .Raw }}"
+              placeholder="12.50 lunch @work *  -1"
+              aria-label="Expense entry"
+              autofocus
+              hx-post="/preview"
+              hx-trigger="input changed delay:150ms, load"
+              hx-target="#preview"
+              hx-swap="innerHTML"
+              {{
+              if
+              .Editing
+              }}
+              hx-vals='{"edit": "1"}'
+              {{
+              end
+              }}
+            />
+            <div id="preview">{{ template "preview" .Preview }}</div>
+          </form>
+          <p class="hint">
+            amount first · <b>@account</b> · <b>*</b> ½ split · <b>-N</b> days
+            ago · <b>DD/MM</b>
+          </p>
+        </section>
 
-      <section class="list" aria-label="Expenses">
-        {{ template "list" .Groups }}
-      </section>
+        <section class="list" aria-label="Expenses">
+          {{ template "list" .Groups }}
+        </section>
+      </div>
     </div>
-  </div>
-</body>
+  </body>
 </html>
-{{ define "list" }}
-{{ if not . }}
+{{ define "list" }} {{ if not . }}
 <div class="empty">No expenses yet.</div>
-{{ else }}
-{{ range . }}
+{{ else }} {{ range . }}
 <div class="daygroup">
-  <div class="dayhead"><span>{{ .Label }}</span><span class="tot">{{ .Total }}</span></div>
+  <div class="dayhead">
+    <span>{{ .Label }}</span><span class="tot">{{ .Total }}</span>
+  </div>
   {{ range .Rows }}
   <div class="row">
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
       <div class="meta-m">
-        {{ template "account" . }}
-        {{ if .Split }}<span class="chip split">½ split</span>{{ end }}
+        {{ template "account" . }} {{ if .Split }}<span class="chip split"
+          >½ split</span
+        >{{ end }}
       </div>
     </div>
     <div class="cell-acct">{{ template "account" . }}</div>
-    <div class="cell-split">{{ if .Split }}<span class="badge split">½</span>{{ end }}</div>
+    <div class="cell-split">
+      {{ if .Split }}<span class="badge split">½</span>{{ end }}
+    </div>
     <div class="acts">
       <a class="ghost" href="/edit/{{ .ID }}">edit</a>
       <form method="post" action="/delete/{{ .ID }}">
@@ -71,31 +95,33 @@
   </div>
   {{ end }}
 </div>
-{{ end }}
-{{ end }}
-{{ end }}
-{{ define "account" }}
-{{ if .AccountDefault }}<span class="chip acct default">@personal</span>{{ else }}<span class="chip acct">{{ .Account }}</span>{{ end }}
-{{ end }}
-{{ define "preview" }}
+{{ end }} {{ end }} {{ end }} {{ define "account" }} {{ if .AccountDefault
+}}<span class="chip acct default">@personal</span>{{ else }}<span
+  class="chip acct"
+  >{{ .Account }}</span
+>{{ end }} {{ end }} {{ define "preview" }}
 <div class="preview chips" aria-label="Preview">
   {{ if .Empty }}
   <span class="chip muted">live preview…</span>
-  {{ else }}
-  {{ if .HasAmount }}<span class="chip amount">{{ .Amount }}</span>{{ end }}
+  {{ else }} {{ if .HasAmount }}<span class="chip amount">{{ .Amount }}</span>{{
+  end }}
   <span class="chip date">{{ .DateLabel }}</span>
-  {{ if .Description }}<span class="chip desc">{{ .Description }}</span>{{ end }}
-  {{ template "account" . }}
-  {{ if .Split }}<span class="chip split">½ split</span>{{ end }}
-  {{ end }}
+  {{ if .Description }}<span class="chip desc">{{ .Description }}</span>{{ end
+  }} {{ template "account" . }} {{ if .Split }}<span class="chip split"
+    >½ split</span
+  >{{ end }} {{ end }}
 </div>
 {{ if .Errors }}
-<div class="gate-bad" role="alert">✗ {{ range $i, $e := .Errors }}{{ if $i }}, {{ end }}{{ $e }}{{ end }}</div>
+<div class="gate-bad" role="alert">
+  ✗ {{ range $i, $e := .Errors }}{{ if $i }}, {{ end }}{{ $e }}{{ end }}
+</div>
 {{ else if not .Empty }}
 <div class="gate-ok">✓ ready</div>
 {{ end }}
 <div class="btnrow">
-  <button class="primary" type="submit"{{ if .DisableSave }} disabled{{ end }}>{{ if .Editing }}Save changes{{ else }}Add{{ end }}</button>
+  <button class="primary" type="submit" {{ if .DisableSave }} disabled{{ end }}>
+    {{ if .Editing }}Save changes{{ else }}Add{{ end }}
+  </button>
   {{ if .Editing }}<a class="ghost cancel" href="/">Cancel</a>{{ end }}
 </div>
 {{ end }}

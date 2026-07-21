@@ -50,20 +50,21 @@ const (
 	ErrTwoAccounts
 )
 
+// parseErrorText holds the terse message for each save-gate violation. The
+// user-facing wording lives with the server's presentation layer, not here.
+var parseErrorText = map[ParseError]string{
+	ErrNoAmount:         "no amount",
+	ErrEmptyDescription: "empty description",
+	ErrTwoDateTokens:    "two date tokens",
+	ErrTwoAccounts:      "two @account tokens",
+}
+
 // Error implements the error interface so a ParseError can be surfaced directly.
 func (e ParseError) Error() string {
-	switch e {
-	case ErrNoAmount:
-		return "no amount"
-	case ErrEmptyDescription:
-		return "empty description"
-	case ErrTwoDateTokens:
-		return "two date tokens"
-	case ErrTwoAccounts:
-		return "two @account tokens"
-	default:
-		return "unknown parse error"
+	if s, ok := parseErrorText[e]; ok {
+		return s
 	}
+	return "unknown parse error"
 }
 
 var (
@@ -164,16 +165,22 @@ func isDateToken(tok string) bool {
 // amountMinorUnits converts a bare-number token (already matched by
 // bareNumberRe) to integer minor units. The fractional part is normalised to
 // two digits: a single digit is scaled up ("7.6" -> 760) and any digits beyond
-// the second are dropped, since minor units (cents) hold at most two.
+// the second are rounded to the nearest cent, half rounding up ("12.567" ->
+// 1257, "3.999" -> 400) — matching the reference parseEntry's Math.round(...*100).
 func amountMinorUnits(tok string) int {
-	intPart, fracPart, hasFrac := splitDecimal(tok)
+	intPart, fracPart, _ := splitDecimal(tok)
 	units, _ := strconv.Atoi(intPart)
-	cents := 0
-	if hasFrac {
-		frac := (fracPart + "00")[:2]
-		cents, _ = strconv.Atoi(frac)
+	// Pad so at least two fractional digits exist, then read cents from the first
+	// two; a padding zero never triggers a round-up.
+	frac := fracPart + "00"
+	cents, _ := strconv.Atoi(frac[:2])
+	total := units*100 + cents
+	// Round the dropped sub-cent digits to the nearest cent: a remainder whose
+	// leading digit is >= 5 is at or above half, so the cent rounds up.
+	if rest := frac[2:]; rest != "" && rest[0] >= '5' {
+		total++
 	}
-	return units*100 + cents
+	return total
 }
 
 // splitDecimal splits a bare number into its integer and fractional parts,

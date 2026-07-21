@@ -51,9 +51,24 @@ func TestParse(t *testing.T) {
 			wantAmount: 760, wantHasAmt: true, wantDesc: "helados", wantDate: day(2026, 7, 21),
 		},
 		{
-			name:       "more than two fractional digits are truncated",
+			name:       "more than two fractional digits round to the nearest cent (up)",
 			raw:        "12.567 thing",
+			wantAmount: 1257, wantHasAmt: true, wantDesc: "thing", wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "more than two fractional digits round to the nearest cent (down)",
+			raw:        "12.564 thing",
 			wantAmount: 1256, wantHasAmt: true, wantDesc: "thing", wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "rounding carries across the euro boundary",
+			raw:        "3.999 thing",
+			wantAmount: 400, wantHasAmt: true, wantDesc: "thing", wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "sub-cent half rounds up",
+			raw:        "0.005 thing",
+			wantAmount: 1, wantHasAmt: true, wantDesc: "thing", wantDate: day(2026, 7, 21),
 		},
 		{
 			name:       "relative date -1 is yesterday",

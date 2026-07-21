@@ -81,7 +81,7 @@ func buildPreview(raw string, p expense.ParsedExpense, interactive, editing bool
 	if strings.TrimSpace(raw) == "" {
 		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
 	}
-	account, isDefault := accountChip(p.Account)
+	account, isDefault := accountDisplay(p.Account)
 	v := previewView{
 		HasAmount:      p.HasAmount,
 		DateLabel:      p.Date.Format(dayLabelLayout),
@@ -101,11 +101,16 @@ func buildPreview(raw string, p expense.ParsedExpense, interactive, editing bool
 	return v
 }
 
-// accountChip is the "@tag" display for the parser's account string: the stored
-// tag when present, or the "@personal" default when blank (never shown blank).
-func accountChip(account string) (label string, isDefault bool) {
+// accountDefaultLabel is shown wherever an expense has no account, so the
+// default account is always visible and consistent rather than blank.
+const accountDefaultLabel = "@personal"
+
+// accountDisplay is the "@tag" display for a bare account string: the stored tag
+// when present, or the accountDefaultLabel default when blank (never shown
+// blank). isDefault flags the default so callers can style it.
+func accountDisplay(account string) (label string, isDefault bool) {
 	if account == "" {
-		return "@personal", true
+		return accountDefaultLabel, true
 	}
 	return "@" + account, false
 }
@@ -177,11 +182,14 @@ func formatEuro(minorUnits int) string {
 	return fmt.Sprintf("€%d.%02d", minorUnits/100, minorUnits%100)
 }
 
-// accountLabel is the "@tag" display for a row: the stored tag when present, or
-// the "@personal" default when the account is blank (never shown blank).
+// accountLabel is the "@tag" display for a row's nullable stored account: the
+// stored tag when present, or the accountDefaultLabel default when NULL. It
+// shares accountDisplay's rendering so the row and preview never drift.
 func accountLabel(account *string) string {
-	if account == nil {
-		return "@personal"
+	tag := ""
+	if account != nil {
+		tag = *account
 	}
-	return "@" + *account
+	label, _ := accountDisplay(tag)
+	return label
 }

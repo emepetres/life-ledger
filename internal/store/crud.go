@@ -30,11 +30,11 @@ const columns = "id, date, amount, description, split, account, raw_text, create
 // (ADR-0001); a nil Account is written as SQL NULL, never an empty string.
 func (s *Store) Create(ctx context.Context, e *expense.Expense) error {
 	now := s.now()
+	args := append(writeArgs(e), now.Format(tsLayout), now.Format(tsLayout))
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO expense (date, amount, description, split, account, raw_text, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.Date.Format(dateLayout), e.Amount, e.Description, boolToInt(e.Split),
-		accountArg(e.Account), e.RawText, now.Format(tsLayout), now.Format(tsLayout))
+		args...)
 	if err != nil {
 		return fmt.Errorf("inserting expense: %w", err)
 	}
@@ -92,12 +92,12 @@ func (s *Store) Get(ctx context.Context, id int64) (expense.Expense, error) {
 // UpdatedAt is set to the new instant.
 func (s *Store) Update(ctx context.Context, e *expense.Expense) error {
 	now := s.now()
+	args := append(writeArgs(e), now.Format(tsLayout), e.ID)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE expense
 		 SET date = ?, amount = ?, description = ?, split = ?, account = ?, raw_text = ?, updated_at = ?
 		 WHERE id = ?`,
-		e.Date.Format(dateLayout), e.Amount, e.Description, boolToInt(e.Split),
-		accountArg(e.Account), e.RawText, now.Format(tsLayout), e.ID)
+		args...)
 	if err != nil {
 		return fmt.Errorf("updating expense %d: %w", e.ID, err)
 	}
@@ -168,6 +168,17 @@ func scanExpense(sc scanner) (expense.Expense, error) {
 		e.Account = &a
 	}
 	return e, nil
+}
+
+// writeArgs binds the mutable columns shared by Create's INSERT and Update's
+// UPDATE, in their common `date … raw_text` order. The caller appends its own
+// trailing arguments (the timestamps, and Update's id), so the two statements
+// share one column-binding shape and can't drift apart.
+func writeArgs(e *expense.Expense) []any {
+	return []any{
+		e.Date.Format(dateLayout), e.Amount, e.Description,
+		boolToInt(e.Split), accountArg(e.Account), e.RawText,
+	}
 }
 
 // boolToInt maps a Go bool to the 0/1 integer SQLite stores for split.
