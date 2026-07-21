@@ -17,8 +17,10 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/emepetres/life-ledger/internal/auth"
 	"github.com/emepetres/life-ledger/internal/expense"
 	"github.com/emepetres/life-ledger/internal/store"
 	"github.com/emepetres/life-ledger/web"
@@ -53,6 +55,10 @@ type Server struct {
 	// now supplies "today" for parsing; injected so date-relative entries and the
 	// day grouping are deterministic in tests. Production uses the wall clock.
 	now func() time.Time
+	// guard enforces authentication when set: it gates the mux with middleware and
+	// backs the login/logout routes. Nil leaves the app unguarded, which only the
+	// non-auth handler tests do — production always wires a guard (see cmd).
+	guard *auth.Guard
 }
 
 // Option customises a Server at construction time.
@@ -65,10 +71,18 @@ func WithClock(now func() time.Time) Option {
 	return func(s *Server) { s.now = now }
 }
 
+// WithGuard turns on authentication: the returned handler gains a login page and
+// logout route, and every other route is gated by the guard's middleware
+// (ADR-0004). Production always passes this; it is a functional option so the
+// handler tests whose subject is not auth can construct an unguarded server.
+func WithGuard(g *auth.Guard) Option {
+	return func(s *Server) { s.guard = g }
+}
+
 // New builds the application's HTTP handler with all routes registered, backed
 // by the given store.
 func New(store Store, opts ...Option) (http.Handler, error) {
-	tmpl, err := template.ParseFS(web.Templates, "templates/home.html")
+	tmpl, err := template.ParseFS(web.Templates, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parsing templates: %w", err)
 	}
@@ -127,13 +141,74 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// Home page. Registered last as the catch-all for "/" so unknown paths 404.
 	mux.HandleFunc("GET /{$}", s.handleHome)
 
-	return mux, nil
+	if s.guard == nil {
+		return mux, nil
+	}
+
+	// Auth on: the login page and logout route, plus the guard's middleware gating
+	// everything except the login page, static assets, and the health check.
+	mux.HandleFunc("GET /login", s.handleLoginForm)
+	mux.HandleFunc("POST /login", s.handleLogin)
+	mux.HandleFunc("POST /logout", s.handleLogout)
+
+	return s.guard.Middleware(mux, unauthenticatedOK), nil
+}
+
+// unauthenticatedOK reports whether a request may bypass the auth middleware: the
+// login page (so the user can reach it to authenticate), the static assets, and
+// the platform health probe (ADR-0004). Path-based, so it covers GET and POST of
+// the login route alike.
+func unauthenticatedOK(r *http.Request) bool {
+	p := r.URL.Path
+	return p == "/login" || p == "/health" || strings.HasPrefix(p, "/static/")
 }
 
 // handleHome renders the full page: the quick-add form (in add mode) and the
 // day-grouped list.
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	s.renderForm(w, r, http.StatusOK, "", addAction, false)
+}
+
+// handleLoginForm renders the login page. An already-authenticated visitor is
+// sent home rather than shown the form again.
+func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
+	if s.guard.Authenticated(r) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	s.renderLogin(w, http.StatusOK, "")
+}
+
+// handleLogin verifies the submitted password through the guard (which spends a
+// per-IP rate-limit token first, then does the bcrypt compare) and, on success,
+// sets the session cookie and redirects home (Post/Redirect/Get). A wrong
+// password re-renders the form at 401; too many rapid attempts at 429. The
+// password is never echoed back.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	switch err := s.guard.Login(w, r, r.PostFormValue("password")); {
+	case err == nil:
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	case errors.Is(err, auth.ErrRateLimited):
+		s.renderLogin(w, http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
+	default: // auth.ErrInvalidCredentials
+		s.renderLogin(w, http.StatusUnauthorized, "Incorrect password.")
+	}
+}
+
+// handleLogout clears the session cookie and returns to the login page.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	s.guard.Logout(w)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// renderLogin renders the login page at the given status, with an optional error
+// message shown after a rejected or rate-limited attempt.
+func (s *Server) renderLogin(w http.ResponseWriter, status int, errMsg string) {
+	s.renderTemplate(w, status, "login.html", loginView{Error: errMsg})
 }
 
 // handlePreview renders the live-preview fragment for the in-progress line. It
@@ -326,33 +401,29 @@ func newExpense(p expense.ParsedExpense, raw string) *expense.Expense {
 	}
 }
 
-// render executes the home template into a buffer first so a template error
-// yields a clean 500 rather than a partially written body, then writes it with
-// the given status.
+// render executes the home template at the given status.
 func (s *Server) render(w http.ResponseWriter, status int, data homeView) {
+	s.renderTemplate(w, status, "home.html", data)
+}
+
+// renderPartial executes a named template (an htmx fragment) at 200.
+func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
+	s.renderTemplate(w, http.StatusOK, name, data)
+}
+
+// renderTemplate executes the named template into a buffer first — so a template
+// error yields a clean 500 rather than a partially written body — then writes it
+// as HTML with the given status. It is the single write path shared by the full
+// page, the login page, and the htmx fragments.
+func (s *Server) renderTemplate(w http.ResponseWriter, status int, name string, data any) {
 	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, "home.html", data); err != nil {
-		log.Printf("rendering home page: %v", err)
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		log.Printf("rendering %s: %v", name, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = buf.WriteTo(w)
-}
-
-// renderPartial executes a named template (an htmx fragment) into a buffer first
-// so a template error yields a clean 500 rather than a partially written body,
-// then writes it at 200.
-func (s *Server) renderPartial(w http.ResponseWriter, name string, data any) {
-	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
-		log.Printf("rendering %s fragment: %v", name, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
 	_, _ = buf.WriteTo(w)
 }
 

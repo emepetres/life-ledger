@@ -45,6 +45,7 @@ h1 { font-size: 18px; margin: 0; }
   display: grid; place-items: center; font-weight: 700;
 }
 .app-header .sub { color: var(--muted); font-size: 13px; }
+.app-header .logout { margin-left: auto; }
 
 .wrap { max-width: 1000px; margin: 0 auto; padding: 0 20px 40px; }
 
@@ -61,6 +62,8 @@ h1 { font-size: 18px; margin: 0; }
 /* Edit mode: highlight the quick-add rail so it's clear the box is editing an
    existing expense in place rather than adding a new one. */
 .entry.editing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Login: a single centred panel rather than the sticky quick-add rail. */
+.entry.login { max-width: 360px; margin: 40px auto 0; position: static; }
 .qa-input {
   width: 100%; padding: 13px 14px;
   border: 1.5px solid var(--line); border-radius: 10px;

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in · Life Ledger</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="logo">£</div>
+    <div>
+      <h1>Life Ledger</h1>
+      <div class="sub">Personal expense register</div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section class="entry login" aria-label="Log in">
+      <h2>Log in</h2>
+      <form method="post" action="/login" autocomplete="off">
+        <input class="qa-input" type="password" name="password"
+               placeholder="Password" aria-label="Password" autofocus required>
+        {{ if .Error }}<div class="gate-bad" role="alert">✗ {{ .Error }}</div>{{ end }}
+        <div class="btnrow">
+          <button class="primary" type="submit">Log in</button>
+        </div>
+      </form>
+    </section>
+  </div>
+</body>
+</html>

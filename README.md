@@ -5,25 +5,32 @@ on the server, listed, edited, and deleted. See [CONTEXT.md](CONTEXT.md) for the
 domain language and [issue #9](https://github.com/emepetres/life-ledger/issues/9)
 for the full feature spec.
 
-This is the **walking skeleton** ([issue #11](https://github.com/emepetres/life-ledger/issues/11)):
-a server that boots, renders a home page, serves a vendored htmx asset, and
-reports healthy — no database, parser, or auth yet.
-
 ## Run locally
 
 Requires [Go](https://go.dev/dl/) 1.26+. No external services.
 
-```sh
-make run          # or: go run ./cmd/life-ledger
+The ledger is guarded by a single shared password (ADR-0004), enforced in-app and
+identical locally and in production. So that the app boots, first generate a
+bcrypt hash of your chosen password and set it in the environment — the plaintext
+is never stored:
+
+```pwsh
+$Env:LIFELEDGER_PASSWORD_HASH="$(make -s hash-password)"   # prompts for the password
+make run                                                     # or: go run ./cmd/life-ledger
 ```
 
-Then open <http://localhost:8080>. The health probe is at `/health`.
+Then open <http://localhost:8080>, log in, and start entering expenses. The
+health probe at `/health`, the login page, and static assets are reachable
+without a session; everything else requires one.
 
 ### Configuration
 
-| Env var           | Default   | Meaning                                  |
-| ----------------- | --------- | ---------------------------------------- |
-| `LIFELEDGER_ADDR` | `:8080`   | Listen address (`host:port` or `:port`). |
+| Env var                    | Default          | Meaning                                                                                           |
+| -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------- |
+| `LIFELEDGER_ADDR`          | `:8080`          | Listen address (`host:port` or `:port`).                                                          |
+| `LIFELEDGER_PASSWORD_HASH` | *(required)*     | bcrypt hash of the shared password (generate with `make hash-password`). The app won't boot without it. |
+| `LIFELEDGER_SECURE_COOKIE` | `false`          | Sets the session cookie's `Secure` flag. Leave off for local `http://localhost`; set `true` in production (HTTPS). |
+| `LIFELEDGER_SESSION_KEY`   | *(ephemeral)*    | Session-cookie signing secret. **Required** when `LIFELEDGER_SECURE_COOKIE=true` (production). Left unset for local QA, a random key is generated per boot (sessions drop on restart). Rotating it logs everyone out. |
 
 ```sh
 LIFELEDGER_ADDR=127.0.0.1:9000 go run ./cmd/life-ledger
@@ -57,8 +64,12 @@ Correctness lives at two seams (see the spec): pure-function parser unit tests
 ## Layout
 
 ```
-cmd/life-ledger/     entrypoint (reads config, starts the server)
-internal/server/     HTTP handler: home page, static assets, health check
+cmd/life-ledger/     entrypoint (reads config, wires auth, starts the server)
+cmd/hashpw/          helper: bcrypt-hash a password for LIFELEDGER_PASSWORD_HASH
+internal/server/     HTTP handlers: home page, add/edit/delete, login/logout, health
+internal/auth/       session cookie, rate limiter, and the protective middleware
+internal/store/      SQLite persistence (self-creating, embedded migrations)
+internal/expense/    free-text entry parser and the Expense record
 web/                 go:embed'd templates and static assets
   templates/         html/template sources
   static/vendor/     vendored, version-pinned third-party assets (htmx)

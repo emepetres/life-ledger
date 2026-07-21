@@ -7,6 +7,13 @@ import (
 	"github.com/emepetres/life-ledger/internal/expense"
 )
 
+// loginView is the view model for the login page: an optional error message
+// shown after a rejected or rate-limited attempt.
+type loginView struct {
+	// Error is the user-facing message, empty on the first render.
+	Error string
+}
+
 // homeView is the view model for the home page template: the quick-add form
 // state plus the day-grouped list.
 type homeView struct {

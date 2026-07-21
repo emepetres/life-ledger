@@ -5,11 +5,15 @@ BINARY := life-ledger
 PKG    := ./cmd/life-ledger
 export CGO_ENABLED = 0
 
-.PHONY: run build test vet fmt clean
+.PHONY: run build test vet fmt clean hash-password
 
 ## run: start the server locally (one command, no external services).
 run:
 	go run $(PKG)
+
+## hash-password: generate a bcrypt hash to paste into LIFELEDGER_PASSWORD_HASH.
+hash-password:
+	@go run ./cmd/hashpw
 
 ## build: compile the static binary into ./bin.
 build:
