@@ -4,24 +4,52 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emepetres/life-ledger/internal/server"
+	"github.com/emepetres/life-ledger/internal/store"
 )
 
-// newTestServer builds the real handler stack the way main does, then wraps it
-// in an httptest server so tests drive it as a black box over HTTP.
+// testToday is the frozen "today" the test server parses entries against, so
+// date-relative entries and the day grouping are deterministic.
+var testToday = time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+
+// newTestServer builds the real handler stack the way main does — backed by a
+// fresh temp-file store and a frozen clock — then wraps it in an httptest server
+// so tests drive it as a black box over HTTP.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h, err := server.New()
+	return newTestServerWithStore(t, openTempStore(t))
+}
+
+// newTestServerWithStore is newTestServer over a caller-supplied store, so a
+// test can seed or inspect the same store the handler uses.
+func newTestServerWithStore(t *testing.T, st server.Store) *httptest.Server {
+	t.Helper()
+	h, err := server.New(st, server.WithClock(func() time.Time { return testToday }))
 	if err != nil {
 		t.Fatalf("server.New(): %v", err)
 	}
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 	return ts
+}
+
+// openTempStore opens a store at a fresh temp path (self-creating, migrated on
+// open) that is cleaned up with the test.
+func openTempStore(t *testing.T) *store.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "data", "expenses.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
 }
 
 func get(t *testing.T, ts *httptest.Server, path string) (*http.Response, string) {

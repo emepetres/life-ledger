@@ -1,0 +1,129 @@
+/*
+  Life Ledger — one responsive surface (locked prototype Variant D).
+  Desktop (>=640px): quick-add in a sticky lateral rail beside a columned list
+  table. Mobile (<640px): the rail collapses above the list and every table row
+  restacks — amount + description prominent, a compact meta line (account + half)
+  beneath, actions inline. No literal cards: the same table restacks.
+*/
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --ink: #1c2024;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #2f6f4f;
+  --accent-soft: #e6f2ec;
+  --amount: #14532d;
+  --split: #b45309;
+  --split-soft: #fdf0dd;
+  --acct: #3730a3;
+  --acct-soft: #eceafd;
+  --danger: #b91c1c;
+  --radius: 12px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  --sans: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+}
+
+input, button { font-family: inherit; font-size: inherit; }
+
+h1 { font-size: 18px; margin: 0; }
+
+.app-header { display: flex; align-items: center; gap: 10px; padding: 14px 20px; }
+.app-header .logo {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-weight: 700;
+}
+.app-header .sub { color: var(--muted); font-size: 13px; }
+
+.wrap { max-width: 1000px; margin: 0 auto; padding: 0 20px 40px; }
+
+.shell { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
+
+/* ---- quick-add rail ---- */
+.entry {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 16px;
+  position: sticky; top: 14px; z-index: 5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .05);
+}
+.entry h2 { margin: 0 0 10px; font-size: 14px; }
+.qa-input {
+  width: 100%; padding: 13px 14px;
+  border: 1.5px solid var(--line); border-radius: 10px;
+  font-family: var(--mono); font-size: 15px; outline: none;
+}
+.qa-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.btnrow { display: flex; gap: 8px; margin-top: 10px; }
+button.primary {
+  flex: 1; background: var(--accent); color: #fff; border: none;
+  padding: 10px 16px; border-radius: 10px; font-weight: 600; cursor: pointer;
+}
+button.primary:hover { background: #275e43; }
+button.ghost {
+  background: transparent; border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 10px; cursor: pointer; color: var(--muted);
+}
+button.ghost:hover { color: var(--ink); border-color: #cbd0d6; }
+button.ghost.danger:hover { color: var(--danger); border-color: #f0c6c6; }
+.hint { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 12px; }
+.gate-bad { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
+
+/* ---- chips / badges ---- */
+.chip { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.chip.acct { background: var(--acct-soft); color: var(--acct); }
+.chip.acct.default { background: #f1f2f4; color: var(--muted); font-style: italic; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
+.badge.split { background: var(--split-soft); color: var(--split); }
+.chip.split { background: var(--split-soft); color: var(--split); font-weight: 600; }
+
+/* ---- day-grouped list ---- */
+.daygroup { margin-top: 16px; }
+.daygroup:first-child { margin-top: 0; }
+.dayhead {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 700; padding: 0 6px 5px;
+  border-bottom: 1px solid var(--line);
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+.dayhead .tot { font-family: var(--mono); font-weight: 600; color: #94a1ad; }
+.row {
+  display: grid;
+  grid-template-columns: 110px 1fr max-content 40px max-content;
+  align-items: center; gap: 12px;
+  padding: 11px 6px; border-bottom: 1px solid #f2f3f5;
+}
+.row:hover { background: #fafbfc; }
+.row .amt {
+  font-family: var(--mono); font-weight: 700; color: var(--amount);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.desc-cell { min-width: 0; }
+.desc-cell .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.meta-m { display: none; gap: 6px; margin-top: 4px; align-items: center; } /* mobile-only */
+.cell-split { text-align: center; }
+.row .acts { display: flex; gap: 4px; justify-content: flex-end; opacity: 0; transition: opacity .1s; }
+.row:hover .acts { opacity: 1; }
+
+.empty { color: var(--muted); padding: 16px; text-align: center; }
+
+/* ---- narrow: rail collapses, rows restack (no literal cards) ---- */
+@media (max-width: 640px) {
+  .shell { grid-template-columns: 1fr; }
+  .entry { top: 8px; }
+  .row { grid-template-columns: auto 1fr auto; column-gap: 12px; padding: 12px 4px; }
+  .row .amt { text-align: left; font-size: 16px; }
+  .cell-acct, .cell-split { display: none; } /* folded into the meta line */
+  .meta-m { display: flex; }
+  .row .acts { opacity: 1; } /* no hover on touch */
+}

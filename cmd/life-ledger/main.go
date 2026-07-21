@@ -36,7 +36,7 @@ func main() {
 	defer func() { _ = st.Close() }()
 	log.Printf("database ready at %s", dbPath)
 
-	handler, err := server.New()
+	handler, err := server.New(st)
 	if err != nil {
 		log.Fatalf("building server: %v", err)
 	}

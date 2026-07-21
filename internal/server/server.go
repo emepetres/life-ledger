@@ -1,18 +1,23 @@
-// Package server wires the HTTP surface of Life Ledger: the rendered home page,
-// the vendored static assets, and the unauthenticated health check. It builds a
+// Package server wires the HTTP surface of Life Ledger: the rendered home page
+// with its quick-add form and day-grouped expense list, the add endpoint (with
+// server-side save-gate re-validation so a no-JS POST is refused too), the
+// vendored static assets, and the unauthenticated health check. It builds a
 // plain net/http handler so it can be exercised as a black box in tests and
 // booted unchanged by cmd/life-ledger.
 package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
 	"mime"
 	"net/http"
+	"time"
 
+	"github.com/emepetres/life-ledger/internal/expense"
 	"github.com/emepetres/life-ledger/web"
 )
 
@@ -23,14 +28,38 @@ func init() {
 	_ = mime.AddExtensionType(".js", "text/javascript; charset=utf-8")
 }
 
-// homeData is the view model for the home page template.
-type homeData struct {
-	// HTMXSrc is the local URL of the vendored, version-pinned htmx script.
-	HTMXSrc string
+// Store is the persistence surface the server needs: list every expense
+// (newest-first, for day grouping) and create a new one. It is an interface so
+// the HTTP layer depends only on the behaviour it uses and tests can drive it
+// against a real temp-file store.
+type Store interface {
+	List(ctx context.Context) ([]expense.Expense, error)
+	Create(ctx context.Context, e *expense.Expense) error
 }
 
-// New builds the application's HTTP handler with all routes registered.
-func New() (http.Handler, error) {
+// Server holds the wired dependencies shared by all handlers.
+type Server struct {
+	store   Store
+	tmpl    *template.Template
+	htmxSrc string
+	// now supplies "today" for parsing; injected so date-relative entries and the
+	// day grouping are deterministic in tests. Production uses the wall clock.
+	now func() time.Time
+}
+
+// Option customises a Server at construction time.
+type Option func(*Server)
+
+// WithClock injects the clock used to resolve "today" when parsing entries. It
+// exists so tests can freeze time and assert on date grouping; production leaves
+// it at the default local wall clock.
+func WithClock(now func() time.Time) Option {
+	return func(s *Server) { s.now = now }
+}
+
+// New builds the application's HTTP handler with all routes registered, backed
+// by the given store.
+func New(store Store, opts ...Option) (http.Handler, error) {
 	tmpl, err := template.ParseFS(web.Templates, "templates/home.html")
 	if err != nil {
 		return nil, fmt.Errorf("parsing templates: %w", err)
@@ -48,6 +77,16 @@ func New() (http.Handler, error) {
 		return nil, fmt.Errorf("mounting static assets: %w", err)
 	}
 
+	s := &Server{
+		store:   store,
+		tmpl:    tmpl,
+		htmxSrc: htmxSrc,
+		now:     time.Now,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	mux := http.NewServeMux()
 
 	// Static assets (including the vendored htmx script). Unauthenticated.
@@ -60,21 +99,121 @@ func New() (http.Handler, error) {
 		fmt.Fprintln(w, "ok")
 	})
 
+	// Add an expense: parse, re-validate the save gate server-side, persist.
+	mux.HandleFunc("POST /add", s.handleAdd)
+
 	// Home page. Registered last as the catch-all for "/" so unknown paths 404.
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		// Render into a buffer first so a template error yields a clean 500
-		// rather than a 200 with a half-written body.
-		var buf bytes.Buffer
-		if err := tmpl.ExecuteTemplate(&buf, "home.html", homeData{HTMXSrc: htmxSrc}); err != nil {
-			log.Printf("rendering home page: %v", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = buf.WriteTo(w)
-	})
+	mux.HandleFunc("GET /{$}", s.handleHome)
 
 	return mux, nil
+}
+
+// handleHome renders the full page: the quick-add form and the day-grouped list.
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	s.renderHome(w, r, http.StatusOK, "", nil)
+}
+
+// renderHome loads the list, groups it by day, and renders the home page with
+// the given status and quick-add form state (echoed raw line + error messages).
+// Both the plain home view and the save-gate rejection render through here, so
+// the list/group/render path lives in one place.
+func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, raw string, errs []string) {
+	expenses, err := s.store.List(r.Context())
+	if err != nil {
+		log.Printf("listing expenses: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, status, homeView{
+		HTMXSrc: s.htmxSrc,
+		Raw:     raw,
+		Errors:  errs,
+		Groups:  groupByDay(expenses),
+	})
+}
+
+// handleAdd parses the submitted line, re-validates the save gate on the server
+// (so an entry that skipped the client is still refused), and persists a valid
+// expense. On success it redirects back to the home page (Post/Redirect/Get) so
+// the new row shows without a resubmittable POST in history; on a save-gate
+// violation it re-renders the page with the offending text and error messages at
+// 422, storing nothing.
+func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	raw := r.PostFormValue("raw")
+
+	parsed := expense.Parse(raw, s.now())
+	if !parsed.OK() {
+		s.renderHome(w, r, http.StatusUnprocessableEntity, raw, errorMessages(parsed.Errors))
+		return
+	}
+
+	if err := s.store.Create(r.Context(), newExpense(parsed, raw)); err != nil {
+		log.Printf("creating expense: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// newExpense turns a validated parse result into the record to store. The full
+// paid Amount is stored regardless of Split (ADR-0001); a blank account is left
+// nil so the store writes SQL NULL, and the verbatim line is retained as
+// RawText. The store fills in the identity and timestamps.
+func newExpense(p expense.ParsedExpense, raw string) *expense.Expense {
+	var account *string
+	if p.Account != "" {
+		a := p.Account
+		account = &a
+	}
+	return &expense.Expense{
+		Date:        p.Date,
+		Amount:      p.Amount,
+		Description: p.Description,
+		Split:       p.Split,
+		Account:     account,
+		RawText:     raw,
+	}
+}
+
+// render executes the home template into a buffer first so a template error
+// yields a clean 500 rather than a partially written body, then writes it with
+// the given status.
+func (s *Server) render(w http.ResponseWriter, status int, data homeView) {
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, "home.html", data); err != nil {
+		log.Printf("rendering home page: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = buf.WriteTo(w)
+}
+
+// errorMessages maps the parser's save-gate violations to the user-facing
+// wording surfaced in the form.
+func errorMessages(errs []expense.ParseError) []string {
+	msgs := make([]string, 0, len(errs))
+	for _, e := range errs {
+		switch e {
+		case expense.ErrNoAmount:
+			msgs = append(msgs, "needs an amount")
+		case expense.ErrEmptyDescription:
+			msgs = append(msgs, "needs a description")
+		case expense.ErrTwoDateTokens:
+			msgs = append(msgs, "two dates")
+		case expense.ErrTwoAccounts:
+			msgs = append(msgs, "two @accounts")
+		default:
+			msgs = append(msgs, e.Error())
+		}
+	}
+	return msgs
 }
 
 // vendoredHTMXSrc finds the single vendored htmx asset and returns the URL path

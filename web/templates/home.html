@@ -4,13 +4,72 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Life Ledger</title>
+  <link rel="stylesheet" href="/static/style.css">
   <!-- htmx loaded from a single vendored, version-pinned local asset (no CDN). -->
   <script src="{{ .HTMXSrc }}" defer></script>
 </head>
 <body>
-  <main>
-    <h1>Life Ledger</h1>
-    <p>Personal expense register. The walking skeleton is up and running.</p>
-  </main>
+  <header class="app-header">
+    <div class="logo">£</div>
+    <div>
+      <h1>Life Ledger</h1>
+      <div class="sub">Personal expense register</div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="shell">
+      <section class="entry" aria-label="Quick add">
+        <h2>Quick add</h2>
+        <form method="post" action="/add" autocomplete="off">
+          <input class="qa-input" type="text" name="raw" value="{{ .Raw }}"
+                 placeholder="12.50 lunch @work *  -1" aria-label="Expense entry" autofocus>
+          <div class="btnrow">
+            <button class="primary" type="submit">Add</button>
+          </div>
+          {{ if .Errors }}
+          <div class="gate-bad" role="alert">✗ {{ range $i, $e := .Errors }}{{ if $i }}, {{ end }}{{ $e }}{{ end }}</div>
+          {{ end }}
+        </form>
+        <p class="hint">amount first · <b>@account</b> · <b>*</b> half · <b>-N</b> days ago · <b>DD/MM</b></p>
+      </section>
+
+      <section class="list" aria-label="Expenses">
+        {{ template "list" .Groups }}
+      </section>
+    </div>
+  </div>
 </body>
 </html>
+{{ define "list" }}
+{{ if not . }}
+<div class="empty">No expenses yet.</div>
+{{ else }}
+{{ range . }}
+<div class="daygroup">
+  <div class="dayhead"><span>{{ .Label }}</span><span class="tot">{{ .Total }}</span></div>
+  {{ range .Rows }}
+  <div class="row">
+    <div class="amt">{{ .Amount }}</div>
+    <div class="desc-cell">
+      <div class="d">{{ .Description }}</div>
+      <div class="meta-m">
+        {{ template "account" . }}
+        {{ if .Split }}<span class="chip split">½ split</span>{{ end }}
+      </div>
+    </div>
+    <div class="cell-acct">{{ template "account" . }}</div>
+    <div class="cell-split">{{ if .Split }}<span class="badge split">½</span>{{ end }}</div>
+    <div class="acts">
+      <button class="ghost" type="button" disabled>edit</button>
+      <button class="ghost danger" type="button" disabled>delete</button>
+    </div>
+  </div>
+  {{ end }}
+</div>
+{{ end }}
+{{ end }}
+{{ end }}
+{{ define "account" }}
+{{ if .AccountDefault }}<span class="chip acct default">@personal</span>{{ else }}<span class="chip acct">{{ .Account }}</span>{{ end }}
+{{ end }}
