@@ -10,6 +10,14 @@ import (
 	"strconv"
 	"time"
 
+	// Embed the timezone database in the binary (ADR-0005). The server resolves
+	// "today" from the local wall clock, but the distroless runtime image ships no
+	// zoneinfo; without this a container would fall back to UTC and file a
+	// late-evening expense under the wrong calendar day. With tzdata embedded, the
+	// TZ env var (set to Europe/Madrid in production) selects the zone. Do not
+	// remove this blank import — nothing references it directly.
+	_ "time/tzdata"
+
 	"github.com/emepetres/life-ledger/internal/auth"
 	"github.com/emepetres/life-ledger/internal/server"
 	"github.com/emepetres/life-ledger/internal/store"

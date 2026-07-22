@@ -15,8 +15,8 @@ bcrypt hash of your chosen password and set it in the environment — the plaint
 is never stored:
 
 ```pwsh
-$Env:LIFELEDGER_PASSWORD_HASH="$(make -s hash-password)"   # prompts for the password
-make run                                                     # or: go run ./cmd/life-ledger
+$Env:LIFELEDGER_PASSWORD_HASH = "$(make -s hash-password)"   # prompts for the password
+make run                                                       # or: go run ./cmd/life-ledger
 ```
 
 Then open <http://localhost:8080>, log in, and start entering expenses. The
@@ -25,15 +25,15 @@ without a session; everything else requires one.
 
 ### Configuration
 
-| Env var                    | Default          | Meaning                                                                                           |
-| -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------- |
-| `LIFELEDGER_ADDR`          | `:8080`          | Listen address (`host:port` or `:port`).                                                          |
-| `LIFELEDGER_PASSWORD_HASH` | *(required)*     | bcrypt hash of the shared password (generate with `make hash-password`). The app won't boot without it. |
-| `LIFELEDGER_SECURE_COOKIE` | `false`          | Sets the session cookie's `Secure` flag. Leave off for local `http://localhost`; set `true` in production (HTTPS). |
-| `LIFELEDGER_SESSION_KEY`   | *(ephemeral)*    | Session-cookie signing secret. **Required** when `LIFELEDGER_SECURE_COOKIE=true` (production). Left unset for local QA, a random key is generated per boot (sessions drop on restart). Rotating it logs everyone out. |
+| Env var                    | Default       | Meaning                                                                                                                                                                                                               |
+| -------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LIFELEDGER_ADDR`          | `:8080`       | Listen address (`host:port` or `:port`).                                                                                                                                                                              |
+| `LIFELEDGER_PASSWORD_HASH` | _(required)_  | bcrypt hash of the shared password (generate with `make hash-password`). The app won't boot without it.                                                                                                               |
+| `LIFELEDGER_SECURE_COOKIE` | `false`       | Sets the session cookie's `Secure` flag. Leave off for local `http://localhost`; set `true` in production (HTTPS).                                                                                                    |
+| `LIFELEDGER_SESSION_KEY`   | _(ephemeral)_ | Session-cookie signing secret. **Required** when `LIFELEDGER_SECURE_COOKIE=true` (production). Left unset for local QA, a random key is generated per boot (sessions drop on restart). Rotating it logs everyone out. |
 
-```sh
-LIFELEDGER_ADDR=127.0.0.1:9000 go run ./cmd/life-ledger
+```pwsh
+$Env:LIFELEDGER_ADDR = "127.0.0.1:9000"; go run ./cmd/life-ledger
 ```
 
 ## Build
@@ -41,20 +41,39 @@ LIFELEDGER_ADDR=127.0.0.1:9000 go run ./cmd/life-ledger
 Produces a single fully-static binary (cgo disabled), ready for a `FROM scratch`
 container image:
 
-```sh
+```pwsh
 make build        # -> bin/life-ledger
 
 # Linux container target from any dev OS:
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/life-ledger ./cmd/life-ledger
+$Env:CGO_ENABLED = 0; $Env:GOOS = "linux"; $Env:GOARCH = "amd64"
+go build -o bin/life-ledger ./cmd/life-ledger
 ```
 
 Templates and static assets (including the vendored, version-pinned htmx script)
 are embedded via `go:embed`, so the binary is self-contained — no CDN, no
 sidecar files.
 
+The container image is built the same way (`docker build .`, or `make docker-build`):
+a multi-stage Dockerfile compiles the static binary and drops it into a
+distroless image (ADR-0005).
+
+## Deploy
+
+Life Ledger runs on Azure Container Apps, provisioned by Bicep in `infra/` and
+shipped by GitHub Actions (ADR-0005):
+
+- Push to `main` runs the gated CI/CD workflow — tests, then deploy.
+- Infrastructure is applied by a separate workflow on `infra/**` changes or manual
+  dispatch.
+
+First-time setup (OIDC trust, GitHub Secrets, bootstrap) is documented in
+[docs/deployment/github-secrets.md](docs/deployment/github-secrets.md). The
+overall system — modules, request flow, and deployment topology — is in
+[docs/architecture.md](docs/architecture.md).
+
 ## Test
 
-```sh
+```pwsh
 make test         # or: go test ./...
 ```
 

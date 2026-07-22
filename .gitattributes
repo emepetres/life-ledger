@@ -1,0 +1,32 @@
+# Normalise line endings so the CI gofmt gate (.github/workflows/ci-cd.yml) never
+# fails on a CRLF commit, regardless of a contributor's core.autocrlf setting.
+# Git stores text files with LF; the working tree gets the platform's native
+# endings on checkout.
+
+# Let Git decide what is text and normalise it to LF in the repository.
+* text=auto
+
+# Be explicit for the languages/formats we own, so they are always LF in-repo.
+*.go     text
+*.mod    text
+*.sum    text
+*.sql    text
+*.html   text
+*.css    text
+*.js     text
+*.md     text
+*.yml    text
+*.yaml   text
+*.bicep  text
+*.json   text
+Dockerfile text
+Makefile   text
+
+# Vendored/minified assets: leave untouched, never normalise.
+*.min.js -text
+
+# Binary types Git should not touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.gz  binary

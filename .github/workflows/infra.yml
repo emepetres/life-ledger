@@ -1,0 +1,61 @@
+# Infrastructure provisioning for Life Ledger (ADR-0005).
+#
+# Deliberately separate from the app-deploy workflow (ci-cd.yml). Applies the
+# Bicep template that declares the ACR, storage, Container Apps environment, and
+# the Container App. Runs on manual dispatch and automatically when anything
+# under infra/ changes on main. Idempotent: re-running with no changes is a
+# no-op, and it never clobbers the image CD deployed (Bicep pins :latest — ADR-0005).
+
+name: infra
+
+on:
+  workflow_dispatch:
+    inputs:
+      containerImage:
+        description: 'First-run bootstrap only: set to mcr.microsoft.com/k8se/quickstart:latest before any image exists in ACR. Leave empty afterwards.'
+        required: false
+        default: ''
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+
+permissions:
+  id-token: write # OIDC federated login to Azure (ADR-0005)
+  contents: read
+
+jobs:
+  provision:
+    name: provision
+    runs-on: ubuntu-latest
+    concurrency:
+      group: infra-production
+      cancel-in-progress: false
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      LOCATION: ${{ vars.AZURE_LOCATION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The resource group is created once during setup (see
+      # docs/deployment/github-secrets.md) so the deploy identity can be scoped to
+      # the group rather than the whole subscription.
+      - name: Deploy Bicep
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters \
+              location="$LOCATION" \
+              containerImage="${{ github.event.inputs.containerImage }}" \
+              passwordHash="${{ secrets.LIFELEDGER_PASSWORD_HASH }}" \
+              sessionKey="${{ secrets.LIFELEDGER_SESSION_KEY }}"

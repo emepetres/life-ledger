@@ -5,7 +5,9 @@ BINARY := life-ledger
 PKG    := ./cmd/life-ledger
 export CGO_ENABLED = 0
 
-.PHONY: run build test vet fmt clean hash-password
+IMAGE := life-ledger
+
+.PHONY: run build test vet fmt clean hash-password docker-build
 
 ## run: start the server locally (one command, no external services).
 run:
@@ -18,6 +20,10 @@ hash-password:
 ## build: compile the static binary into ./bin.
 build:
 	go build -o bin/$(BINARY) $(PKG)
+
+## docker-build: build the production container image (same artifact CD ships).
+docker-build:
+	docker build -t $(IMAGE):local .
 
 ## test: run the full test suite.
 test:

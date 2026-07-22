@@ -1,0 +1,26 @@
+# Keep the build context small and deterministic. The build stage compiles from
+# source only; everything below is either runtime state, local tooling, build
+# output, or docs that never belong in the image.
+
+# Runtime state: SQLite DB file and WAL sidecars (ADR-0003).
+/data/
+
+# Build output.
+/bin/
+/life-ledger
+/life-ledger.exe
+
+# Go test/coverage artifacts.
+*.out
+
+# VCS, CI, IaC, and docs — not needed to compile the binary.
+.git/
+.github/
+infra/
+docs/
+*.md
+
+# Editor/OS cruft.
+.vscode/
+.idea/
+.DS_Store
