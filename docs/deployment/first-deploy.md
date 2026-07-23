@@ -30,6 +30,16 @@ az account set --subscription $SUBSCRIPTION_ID
 az group create --name $RESOURCE_GROUP --location $LOCATION
 ```
 
+Register the `Microsoft.App` namespace on the subscription. The template deploys
+Azure Container Apps resources, which fail with `MissingSubscriptionRegistration`
+until the namespace is registered. This is a once-per-subscription operation that
+can take a couple of minutes:
+
+```pwsh
+az provider register --namespace Microsoft.App
+az provider show --namespace Microsoft.App --query "registrationState"   # expect "Registered"
+```
+
 ## 2. Entra app registration + OIDC federation
 
 GitHub Actions authenticates to Azure with **OIDC federated identity** — no
