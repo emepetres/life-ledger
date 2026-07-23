@@ -35,6 +35,9 @@ jobs:
     env:
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       LOCATION: ${{ vars.AZURE_LOCATION }}
+      CONTAINER_IMAGE: ${{ github.event.inputs.containerImage }}
+      PASSWORD_HASH: ${{ secrets.LIFELEDGER_PASSWORD_HASH }}
+      SESSION_KEY: ${{ secrets.LIFELEDGER_SESSION_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +59,6 @@ jobs:
             --template-file infra/main.bicep \
             --parameters \
               location="$LOCATION" \
-              containerImage="${{ github.event.inputs.containerImage }}" \
-              passwordHash="${{ secrets.LIFELEDGER_PASSWORD_HASH }}" \
-              sessionKey="${{ secrets.LIFELEDGER_SESSION_KEY }}"
+              containerImage="$CONTAINER_IMAGE" \
+              passwordHash="$PASSWORD_HASH" \
+              sessionKey="$SESSION_KEY"

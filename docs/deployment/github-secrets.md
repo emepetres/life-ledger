@@ -17,7 +17,7 @@ $SUBSCRIPTION_ID = "<your-subscription-id>"
 $RESOURCE_GROUP   = "life-ledger-rg"
 $LOCATION         = "westeurope"
 $REPO             = "emepetres/life-ledger"     # owner/repo
-$APP_REG_NAME     = "life-ledger-github"
+$APP_REG_NAME     = "jcarnero-life-ledger-github"
 ```
 
 ## 1. Resource group
@@ -34,7 +34,7 @@ az group create --name $RESOURCE_GROUP --location $LOCATION
 
 GitHub Actions authenticates to Azure with **OIDC federated identity** — no
 client secret is ever stored (ADR-0005). Create an app registration and a service
-principal for it:
+principal for it (If you don't have permission to create an app registration, ask your Azure admin to do this step for you):
 
 ```pwsh
 $APP_ID    = az ad app create --display-name $APP_REG_NAME --query appId -o tsv
@@ -47,20 +47,36 @@ of the repo. This one subject covers the `deploy` job (push to main) and the
 `infra` job (push to main and manual dispatch, both of which run on `main`):
 
 ```pwsh
+# Repositories created after 2026-07-15 emit immutable OIDC subjects that
+# include the owner and repository IDs (so a recycled repo/owner name can't be
+# reused to impersonate). Fetch those IDs from the GitHub API and build the
+# subject to match the exact token GitHub will present:
+#   repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/main
+$repoOwner, $repoName = $REPO -split '/', 2
+$ownerId = gh api "repos/$REPO" --jq '.owner.id'
+$repoId  = gh api "repos/$REPO" --jq '.id'
+# Use $($repoId) so the ':' after it isn't parsed as a PSDrive scope-qualifier
+# (like $env:PATH) — bare $repoId:ref... would resolve to empty.
+$subject = "repo:$repoOwner@$ownerId/$repoName@$($repoId):ref:refs/heads/main"
+
 $body = @'
 {
   "name": "life-ledger-main",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:__REPO__:ref:refs/heads/main",
+  "subject": "__SUBJECT__",
   "audiences": ["api://AzureADTokenExchange"]
 }
-'@ -replace '__REPO__', $REPO
+'@ -replace '__SUBJECT__', $subject
 
-az ad app federated-credential create --id $APP_ID --parameters $body
+$body | Out-File -FilePath .\fcred.json -Encoding utf8 -NoNewline
+az ad app federated-credential create --id $APP_ID --parameters "@.\fcred.json"
+Remove-Item .\fcred.json
 ```
 
 > If you later deploy from GitHub **Environments** or tags, add more federated
-> credentials with the matching subject (e.g. `repo:OWNER/REPO:environment:production`).
+> credentials with the matching subject. Use the same
+> `OWNER@OWNER-ID/REPO@REPO-ID` form for the repo segment, e.g.
+> `repo:$repoOwner@$ownerId/$repoName@$repoId:environment:production`.
 
 ## 3. Grant the identity rights on the resource group
 

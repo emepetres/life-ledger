@@ -33,3 +33,37 @@ code blocks, not `bash`/`sh`/`shell`. Idiomatic translations:
 - Embedding a variable inside single-quoted JSON → here-string `@'...'@` + `-replace`
 - `openssl rand -base64 32` → `[Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))`
 - `ENV=val cmd` (env-prefix) → `$Env:ENV = "val"; cmd`
+
+### GitHub Actions: never inline injected values into `run:` scripts
+
+`${{ secrets.* }}`, `${{ inputs.* }}`, `${{ vars.* }}`, and `${{ github.* }}`
+are **text substitution** — GitHub pastes the value verbatim into the bash
+script _before_ bash parses it. If the value contains `$`, backtick, `"`, or `\`
+(e.g. a bcrypt hash `$2a$10$…`, a Base64 key, JSON), bash re-interprets those
+characters at parse time. With `set -u` this surfaces as
+`$2: unbound variable`; without it the value is silently corrupted.
+
+Always route injected values through the step's (or job's) `env:` block and
+reference them as shell variables. Bash expands a `$VAR` once and does **not**
+re-scan the expanded text for more `$` tokens, so the embedded `$2a$…` survives
+intact:
+
+```yaml
+env:
+  PASSWORD_HASH: ${{ secrets.LIFELEDGER_PASSWORD_HASH }} # safe
+steps:
+  - run: |
+      set -euo pipefail
+      az … --parameters passwordHash="$PASSWORD_HASH"    # safe
+```
+
+Anti-pattern (do not do this):
+
+```yaml
+- run: |
+    set -euo pipefail
+    az … --parameters passwordHash="${{ secrets.LIFELEDGER_PASSWORD_HASH }}"
+    # bcrypt hash pasted in as $2a$10$… → bash tries to expand $2 → crash
+```
+
+This applies to every `run:` in every workflow, not just the infra one.
