@@ -4,14 +4,35 @@
 # to main; the `deploy` job runs only on push to main and only after `test`
 # passes, so main is never deployed red. Infrastructure is managed separately
 # (infra.yml) — this workflow only builds the image and rolls a new revision.
+#
+# paths-ignore: docs/markdown-only, infra, and agent-config changes can't affect
+# the build, tests, or deployed image. Infra changes run their own workflow
+# (infra.yml). When ALL changed files match an ignore glob, this workflow is
+# skipped; a mixed change (e.g. code + a README tweak) still runs it.
 
 name: ci-cd
 
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+      - ".agents/**"
+      - ".claude/**"
+      - "manual-process-samples/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+      - ".agents/**"
+      - ".claude/**"
+      - "manual-process-samples/**"
 
 jobs:
   test:
