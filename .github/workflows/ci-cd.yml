@@ -33,6 +33,7 @@ on:
       - ".agents/**"
       - ".claude/**"
       - "manual-process-samples/**"
+  workflow_dispatch:
 
 jobs:
   test:
