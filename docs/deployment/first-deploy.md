@@ -179,6 +179,17 @@ image; CD then replaces it (ADR-0005).
    This creates the ACR, storage, environment, and the Container App (running the
    placeholder), and assigns AcrPull to the app's identity.
 
+   > **Note: this run is expected to fail ~33 minutes after it starts.** The
+   > placeholder image (`mcr.microsoft.com/k8se/quickstart:latest`) does not serve
+   > the `/health` endpoint on port 8080 that the liveness and readiness probes in
+   > `infra/main.bicep` require. Container Apps holds the revision-provision window
+   > open for ~30 minutes while the probes continually fail, then emits
+   > `Operation expired` and the deploy step exits 1. This is safe to ignore: the
+   > Container App resource is already created, and the next step (`ci-cd.yml`)
+   > replaces the placeholder with the real app image that does implement
+   > `/health` on `:8080`, after which subsequent redeploys and infra runs
+   > provision normally.
+
 2. **Deploy the real app.** Push to `main` (or re-run `ci-cd.yml`). CD builds the
    image, pushes `:latest` + `:<sha>` to ACR, and rolls the app onto it.
 
