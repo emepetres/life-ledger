@@ -117,9 +117,9 @@ Two invariants worth noting:
 Deployed to Azure Container Apps, provisioned by Bicep, shipped by GitHub Actions
 (ADR-0005). The app is always-warm and capped at a single replica to keep SQLite
 single-writer. The database lives on a local **EmptyDir** volume — ephemeral disk
-that honours SQLite's POSIX locks (an SMB share does not, hence no Azure Files);
-durability is the store module's job, which backs the database up to a **Blob
-container** after every write and restores it on a cold boot (ADR-0003).
+that honours SQLite's POSIX locks; durability is the store module's job, which
+backs the database up to a **Blob container** after every write and restores it
+on a cold boot (ADR-0003).
 
 ```mermaid
 flowchart LR

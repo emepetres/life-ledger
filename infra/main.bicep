@@ -5,9 +5,9 @@
 // needs: an Azure Container Registry, a Log Analytics workspace, a Container Apps
 // environment, and the Container App itself — always-warm (min 1 / max 1,
 // single-writer-safe), pulling from ACR via its own managed identity. SQLite runs
-// on a local EmptyDir volume (which honours its POSIX locks, unlike an SMB share)
-// and the store backs the database up to a Blob container the app reaches via its
-// managed identity (ADR-0003).
+// on a local EmptyDir volume (which honours its POSIX locks) and the store backs
+// the database up to a Blob container the app reaches via its managed identity
+// (ADR-0003).
 //
 // The two runtime secrets are passed in as @secure() parameters from GitHub
 // Secrets by the workflow; they are never committed. See docs/deployment/
@@ -271,9 +271,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       ]
       volumes: [
         {
-          // Local ephemeral disk (container ext4), not an SMB share: it honours
-          // SQLite's POSIX file locks, so no SQLITE_BUSY. Durability comes from
-          // the store's Blob backup, not this volume (ADR-0003).
+          // Local ephemeral disk (container ext4): it honours SQLite's POSIX file
+          // locks, so no SQLITE_BUSY. Durability comes from the store's Blob
+          // backup, not this volume (ADR-0003).
           name: 'data'
           storageType: 'EmptyDir'
         }

@@ -119,8 +119,8 @@ image that doesn't exist yet. So the **first** infra run uses a public placehold
 image (`mendhak/http-https-echo`) that lives on Docker Hub. Crucially, that image
 listens on `:8080` and answers **any** path (including `/health`) with `200`, so
 it satisfies the *same* probe the real image does. The first revision reaches
-**healthy in minutes** on the production `/health:8080` probe — no probe override,
-no ~33-minute readiness failure.
+**healthy in minutes** on the production `/health:8080` probe, with no probe
+override needed.
 
 The placeholder makes the app *bootable* before ACR has an image, but it does not
 avoid ACR authentication: ACA still constructs the pull secret for the ACR entry
