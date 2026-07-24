@@ -29,7 +29,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # Sensible defaults; production overrides via Container Apps (Bicep, ADR-0005).
-#   LIFELEDGER_DB_PATH — the DB lives on the mounted Azure Files volume directory.
+#   LIFELEDGER_DB_PATH — the DB lives on the mounted /data volume (ephemeral in
+#                        production; the store backs it up to Blob, ADR-0003).
 #   TZ                 — selects the embedded zoneinfo so "today" is the local day.
 ENV LIFELEDGER_DB_PATH=/data/expenses.db \
     TZ=Europe/Madrid

@@ -3,9 +3,11 @@
 // Deployed at resource-group scope by the infra workflow (.github/workflows/
 // infra.yml), separately from app deploys. Declares everything the running app
 // needs: an Azure Container Registry, a Log Analytics workspace, a Container Apps
-// environment with an Azure Files volume for the SQLite database, and the
-// Container App itself — always-warm (min 1 / max 1, single-writer-safe),
-// pulling from ACR via its own managed identity.
+// environment, and the Container App itself — always-warm (min 1 / max 1,
+// single-writer-safe), pulling from ACR via its own managed identity. SQLite runs
+// on a local EmptyDir volume (which honours its POSIX locks, unlike an SMB share)
+// and the store backs the database up to a Blob container the app reaches via its
+// managed identity (ADR-0003).
 //
 // The two runtime secrets are passed in as @secure() parameters from GitHub
 // Secrets by the workflow; they are never committed. See docs/deployment/
@@ -38,7 +40,7 @@ param timeZone string = 'Europe/Madrid'
 var suffix = uniqueString(resourceGroup().id, baseName)
 var acrName = 'acr${suffix}'
 var storageName = 'st${suffix}'
-var shareName = 'ledgerdata'
+var backupContainerName = 'ledgerbackup'
 var envName = '${baseName}-env'
 var appName = baseName
 var logName = '${baseName}-logs'
@@ -51,6 +53,10 @@ var effectiveImage = empty(containerImage) ? '${acr.properties.loginServer}/life
 // AcrPull built-in role, granted to the app's managed identity so it can pull
 // without a stored registry credential.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+
+// Storage Blob Data Contributor built-in role, granted to the app's managed
+// identity so it can read/write the backup blob with no stored account key.
+var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // --- container registry ------------------------------------------------------
 
@@ -65,7 +71,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   }
 }
 
-// --- storage: Azure Files share for the SQLite volume ------------------------
+// --- storage: Blob container for the SQLite backup ---------------------------
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
@@ -80,17 +86,19 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storage
   name: 'default'
 }
 
-resource share 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
-  parent: fileService
-  name: shareName
+// The single container the store snapshots the database into (backup-on-write)
+// and restores from (restore-on-boot). The app authenticates with its managed
+// identity, so no account key is ever handled; public access stays off.
+resource backupContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: backupContainerName
   properties: {
-    shareQuota: 5
-    enabledProtocols: 'SMB'
+    publicAccess: 'None'
   }
 }
 
@@ -121,21 +129,6 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-// Mount the Azure Files share into the environment so the app can reference it
-// as a volume. accessMode ReadWrite: the single writer is the sole replica.
-resource envStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
-  parent: env
-  name: shareName
-  properties: {
-    azureFile: {
-      accountName: storage.name
-      accountKey: storage.listKeys().keys[0].value
-      shareName: shareName
-      accessMode: 'ReadWrite'
-    }
-  }
-}
-
 // --- container app -----------------------------------------------------------
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
@@ -148,8 +141,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: env.id
     configuration: {
       // Single revision: at steady state only one replica runs, keeping SQLite
-      // single-writer. A revision swap can briefly overlap old+new on the same
-      // volume — bounded by WAL + busy_timeout at this write volume (ADR-0005).
+      // single-writer. Each replica has its own EmptyDir database; the store's
+      // Blob backup (backup-on-write / restore-on-boot) is what carries data
+      // across a reschedule or a revision swap (ADR-0003).
       activeRevisionsMode: 'Single'
       ingress: {
         external: true
@@ -191,6 +185,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'LIFELEDGER_DB_PATH'
               value: '/data/expenses.db'
+            }
+            {
+              // Container URL of the backup blob store. Setting this wires the
+              // store's Blob backup sink (backup-on-write / restore-on-boot); the
+              // app reaches it via managed identity, no key (ADR-0003).
+              name: 'LIFELEDGER_BACKUP_BLOB_URL'
+              value: '${storage.properties.primaryEndpoints.blob}${backupContainer.name}'
             }
             {
               name: 'TZ'
@@ -235,9 +236,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       ]
       volumes: [
         {
+          // Local ephemeral disk (container ext4), not an SMB share: it honours
+          // SQLite's POSIX file locks, so no SQLITE_BUSY. Durability comes from
+          // the store's Blob backup, not this volume (ADR-0003).
           name: 'data'
-          storageType: 'AzureFile'
-          storageName: envStorage.name
+          storageType: 'EmptyDir'
         }
       ]
       scale: {
@@ -258,6 +261,20 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: acr
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    principalId: app.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Grant the app's managed identity read/write on the backup container, so the
+// store's Blob sink authenticates with the identity instead of an account key.
+// Scoped to the storage account (which now holds only this backup container),
+// parallel to the AcrPull assignment above.
+resource blobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, app.id, blobContributorRoleId)
+  scope: storage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
     principalId: app.identity.principalId
     principalType: 'ServicePrincipal'
   }
