@@ -12,14 +12,14 @@ on:
   workflow_dispatch:
     inputs:
       containerImage:
-        description: 'First-run bootstrap only: set to mcr.microsoft.com/k8se/quickstart:latest before any image exists in ACR. Leave empty afterwards.'
+        description: "First-run bootstrap only: set to mcr.microsoft.com/k8se/quickstart:latest before any image exists in ACR. Leave empty afterwards."
         required: false
-        default: ''
-  push:
-    branches: [main]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/infra.yml'
+        default: ""
+  # # push:
+  # #   branches: [main]
+  # #   paths:
+  # #     - 'infra/**'
+  # #     - '.github/workflows/infra.yml'
 
 permissions:
   id-token: write # OIDC federated login to Azure (ADR-0005)

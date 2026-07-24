@@ -13,26 +13,26 @@
 name: ci-cd
 
 on:
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "infra/**"
-      - ".github/workflows/infra.yml"
-      - ".agents/**"
-      - ".claude/**"
-      - "manual-process-samples/**"
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "infra/**"
-      - ".github/workflows/infra.yml"
-      - ".agents/**"
-      - ".claude/**"
-      - "manual-process-samples/**"
+  # # pull_request:
+  # #   branches: [main]
+  # #   paths-ignore:
+  # #     - "**/*.md"
+  # #     - "docs/**"
+  # #     - "infra/**"
+  # #     - ".github/workflows/infra.yml"
+  # #     - ".agents/**"
+  # #     - ".claude/**"
+  # #     - "manual-process-samples/**"
+  # # push:
+  # #   branches: [main]
+  # #   paths-ignore:
+  # #     - "**/*.md"
+  # #     - "docs/**"
+  # #     - "infra/**"
+  # #     - ".github/workflows/infra.yml"
+  # #     - ".agents/**"
+  # #     - ".claude/**"
+  # #     - "manual-process-samples/**"
   workflow_dispatch:
 
 jobs:
