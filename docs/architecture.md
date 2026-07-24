@@ -33,6 +33,12 @@ internal/store/      Persistence. A repository over one SQLite file via the
                      Backup sink (WithBackup) makes it durable on ephemeral
                      storage: a consistent VACUUM INTO snapshot is saved after
                      each write, and a cold boot restores from it. (ADR-0003)
+internal/blobbackup/ Production implementation of store.Backup: a thin adapter
+                     that snapshots the SQLite database to a single Azure Blob
+                     (managed identity, no account key) and restores it on a cold
+                     boot. The one place the Azure SDK enters the binary — every
+                     test runs against in-process fakes of the same seam — so
+                     local QA and CI stay zero-config and offline. (ADR-0003)
 internal/auth/       Access control. The protective middleware, the HMAC-signed
                      stateless session cookie, and a per-IP in-memory login rate
                      limiter. (ADR-0004)
@@ -52,18 +58,27 @@ flowchart TD
     server["internal/server<br/>(HTTP handlers, templates)"]
     auth["internal/auth<br/>(guard, session, rate limit)"]
     store["internal/store<br/>(SQLite repository)"]
+    blobbackup["internal/blobbackup<br/>(Azure Blob store.Backup sink)"]
     expense["internal/expense<br/>(parser + Expense record)"]
     web["web<br/>(embedded templates + htmx)"]
 
     main --> server
     main --> auth
     main --> store
+    main --> blobbackup
     server --> auth
     server --> store
     server --> expense
     server --> web
     store --> expense
+    blobbackup --> store
 ```
+
+`internal/blobbackup` is wired only in `cmd/life-ledger`: when
+`LIFELEDGER_BACKUP_BLOB_URL` is set, `main` constructs the Blob `Sink` and injects
+it via `store.WithBackup`. It depends on `internal/store` only to implement that
+package's `Backup` interface — the store never depends back on it, so the SDK stays
+out of the persistence core and out of every test.
 
 `internal/expense` is the leaf domain package — everything depends inward on it,
 and it depends on nothing. The `server` package defines its own narrow `Store`
