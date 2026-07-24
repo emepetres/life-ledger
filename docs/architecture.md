@@ -29,7 +29,10 @@ internal/expense/    Domain core. The free-text parser (raw line -> ParsedExpens
 internal/store/      Persistence. A repository over one SQLite file via the
                      pure-Go modernc.org/sqlite driver; owns the self-creating
                      startup path and embedded goose migrations, and sets the
-                     WAL / foreign_keys / busy_timeout pragmas. (ADR-0003)
+                     WAL / foreign_keys / busy_timeout pragmas. An optional
+                     Backup sink (WithBackup) makes it durable on ephemeral
+                     storage: a consistent VACUUM INTO snapshot is saved after
+                     each write, and a cold boot restores from it. (ADR-0003)
 internal/auth/       Access control. The protective middleware, the HMAC-signed
                      stateless session cookie, and a per-IP in-memory login rate
                      limiter. (ADR-0004)

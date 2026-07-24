@@ -12,6 +12,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -36,8 +37,9 @@ const DefaultDBPath = "./data/expenses.db"
 // Store is a repository over the expense table. It is safe for concurrent use;
 // the underlying *sql.DB manages its own connection pool.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db     *sql.DB
+	now    func() time.Time
+	backup Backup // durable sink for backup-on-write / restore-on-boot; nil = pure local file
 }
 
 // Option customises a Store at open time.
@@ -55,28 +57,42 @@ func WithClock(now func() time.Time) Option {
 // embedded migrations, and returns a ready Store. It is the single startup path
 // used identically by local QA and production (ADR-0003); the only difference is
 // the configured path. Call Close when done.
+//
+// When a backup sink is configured (WithBackup) and the local file is absent,
+// Open first restores from the sink so the volume-mounted ephemeral file is
+// rebuilt before it is opened; migrations still run afterwards, bringing a
+// restored older database up to the current schema before it serves.
 func Open(path string, opts ...Option) (*Store, error) {
+	s := &Store{now: func() time.Time { return time.Now().UTC() }}
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("creating db directory %q: %w", dir, err)
 		}
 	}
 
+	// Startup orchestration (ADR-0003): decide restore-from-backup vs fresh vs
+	// reuse-existing before opening, so the file is in place when we open it.
+	origin, err := s.restorePlan(context.Background(), path)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening database %q: %w", path, err)
 	}
-
-	s := &Store{db: db, now: func() time.Time { return time.Now().UTC() }}
-	for _, opt := range opts {
-		opt(s)
-	}
+	s.db = db
 
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
+	log.Printf("database ready at %s (%s)", path, origin)
 	return s, nil
 }
 

@@ -45,7 +45,7 @@ func (s *Store) Create(ctx context.Context, e *expense.Expense) error {
 	e.ID = id
 	e.CreatedAt = now
 	e.UpdatedAt = now
-	return nil
+	return s.backupAfterWrite(ctx)
 }
 
 // List returns every stored expense, newest first — ordered by date descending
@@ -109,7 +109,7 @@ func (s *Store) Update(ctx context.Context, e *expense.Expense) error {
 		return ErrNotFound
 	}
 	e.UpdatedAt = now
-	return nil
+	return s.backupAfterWrite(ctx)
 }
 
 // Delete removes the expense with the given id, returning ErrNotFound if none
@@ -126,7 +126,7 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return s.backupAfterWrite(ctx)
 }
 
 // scanner is the shared Scan surface of *sql.Row and *sql.Rows, so a single

@@ -1,9 +1,13 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +41,235 @@ func openTemp(t *testing.T, opts ...store.Option) *store.Store {
 }
 
 func ptr(s string) *string { return &s }
+
+// fakeSink is an in-process Backup, the durability analog of the fake clock: it
+// holds the latest snapshot bytes in memory so a store opened at a fresh path
+// can be restored from it without any Azure. saveErr / loadErr stub genuine
+// failures; a nil data field is the "no backup yet" state Load reports as
+// (false, nil).
+type fakeSink struct {
+	mu      sync.Mutex
+	data    []byte // latest snapshot, or nil when nothing saved yet
+	saves   int
+	saveErr error
+	loadErr error
+}
+
+func (f *fakeSink) Save(_ context.Context, snapshotPath string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	b, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return err
+	}
+	f.data = b
+	f.saves++
+	return nil
+}
+
+func (f *fakeSink) Load(_ context.Context, destPath string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return false, f.loadErr
+	}
+	if f.data == nil {
+		return false, nil
+	}
+	if err := os.WriteFile(destPath, f.data, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// freshDBPath returns a not-yet-existing db path under its own temp dir, so each
+// call is an independent empty EmptyDir-like volume.
+func freshDBPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "data", "expenses.db")
+}
+
+// AC: Backup-on-write — after Create through a sink, opening a *new* store at a
+// fresh empty path with the *same* sink restores the expense. Also covers
+// snapshot consistency (N writes → exactly N rows) and that the restored DB is
+// at the current schema (a further Create on it succeeds).
+func TestBackupOnWriteRestoresAtFreshPath(t *testing.T) {
+	sink := &fakeSink{}
+	ctx := context.Background()
+
+	first, err := store.Open(freshDBPath(t), store.WithBackup(sink))
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	descs := []string{"coffee", "parking", "lunch"}
+	for _, d := range descs {
+		if err := first.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: d, RawText: "1 " + d}); err != nil {
+			t.Fatalf("Create %s: %v", d, err)
+		}
+	}
+	_ = first.Close()
+
+	// A brand-new store at a different empty path, same sink: it must rebuild
+	// itself from the latest snapshot.
+	second, err := store.Open(freshDBPath(t), store.WithBackup(sink))
+	if err != nil {
+		t.Fatalf("open second store: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	got, err := second.List(ctx)
+	if err != nil {
+		t.Fatalf("List after restore: %v", err)
+	}
+	if len(got) != len(descs) {
+		t.Fatalf("restored List = %d rows, want %d (snapshot consistency)", len(got), len(descs))
+	}
+
+	// Schema is current after restore: a write on the restored DB succeeds.
+	if err := second.Create(ctx, &expense.Expense{Date: baseTime, Amount: 200, Description: "post-restore", RawText: "2 post-restore"}); err != nil {
+		t.Fatalf("Create on restored store: %v", err)
+	}
+}
+
+// AC: Restore only when local absent — a boot with an existing local file
+// reuses it and never restores. Proven by pointing the second boot at a sink
+// whose Load would fail: because the file already exists, Load must not be
+// called, so Open succeeds and the local data is intact.
+func TestExistingLocalFileReusedNotRestored(t *testing.T) {
+	path := freshDBPath(t)
+	ctx := context.Background()
+
+	first, err := store.Open(path, store.WithBackup(&fakeSink{}))
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	if err := first.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: "keep", RawText: "1 keep"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_ = first.Close()
+
+	poison := &fakeSink{loadErr: errors.New("Load must not be called when a local file exists")}
+	second, err := store.Open(path, store.WithBackup(poison))
+	if err != nil {
+		t.Fatalf("reopen over existing local file: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	got, err := second.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0].Description != "keep" {
+		t.Fatalf("reused local file lost data: got %d rows %+v", len(got), got)
+	}
+}
+
+// AC: First-ever boot — no local file, empty sink — starts a clean empty DB
+// with no error and no restore.
+func TestFirstBootEmptySinkStartsFresh(t *testing.T) {
+	sink := &fakeSink{}
+	s := openTemp(t, store.WithBackup(sink))
+
+	got, err := s.List(context.Background())
+	if err != nil {
+		t.Fatalf("List on fresh DB with empty sink: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("fresh DB List = %d rows, want 0", len(got))
+	}
+}
+
+// AC: A sink stubbed to fail on Save makes the write operation return an error —
+// "write returned" must imply "backup durable".
+func TestSaveFailureFailsWrite(t *testing.T) {
+	sink := &fakeSink{saveErr: errors.New("blob unreachable")}
+	s := openTemp(t, store.WithBackup(sink))
+	ctx := context.Background()
+
+	err := s.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: "x", RawText: "1 x"})
+	if err == nil {
+		t.Fatal("Create returned nil despite Save failure")
+	}
+	if !errors.Is(err, sink.saveErr) {
+		t.Errorf("Create err = %v, want it to wrap %v", err, sink.saveErr)
+	}
+}
+
+// AC: A Load error on boot is fatal — never start empty over a good backup.
+func TestLoadErrorOnBootIsFatal(t *testing.T) {
+	sink := &fakeSink{loadErr: errors.New("blob down")}
+
+	_, err := store.Open(freshDBPath(t), store.WithBackup(sink))
+	if err == nil {
+		t.Fatal("Open returned nil despite Load failure; must abort rather than start empty")
+	}
+	if !errors.Is(err, sink.loadErr) {
+		t.Errorf("Open err = %v, want it to wrap %v", err, sink.loadErr)
+	}
+}
+
+// AC: Boot logs which path ran — restored / started fresh / reused local.
+func TestBootLogsOrigin(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	ctx := context.Background()
+
+	assertLogged := func(want string) {
+		t.Helper()
+		if !bytes.Contains(buf.Bytes(), []byte(want)) {
+			t.Errorf("boot log = %q, want it to contain %q", buf.String(), want)
+		}
+	}
+
+	// Fresh, no sink.
+	buf.Reset()
+	sFresh, err := store.Open(freshDBPath(t))
+	if err != nil {
+		t.Fatalf("open fresh: %v", err)
+	}
+	_ = sFresh.Close()
+	assertLogged("started fresh")
+
+	// Restored from backup.
+	sink := &fakeSink{}
+	seed, err := store.Open(freshDBPath(t), store.WithBackup(sink))
+	if err != nil {
+		t.Fatalf("open seed: %v", err)
+	}
+	if err := seed.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: "seed", RawText: "1 seed"}); err != nil {
+		t.Fatalf("Create seed: %v", err)
+	}
+	_ = seed.Close()
+
+	buf.Reset()
+	sRestored, err := store.Open(freshDBPath(t), store.WithBackup(sink))
+	if err != nil {
+		t.Fatalf("open restored: %v", err)
+	}
+	_ = sRestored.Close()
+	assertLogged("restored from backup")
+
+	// Reused existing local file.
+	path := freshDBPath(t)
+	sInit, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open init: %v", err)
+	}
+	_ = sInit.Close()
+
+	buf.Reset()
+	sReuse, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	_ = sReuse.Close()
+	assertLogged("reused existing local file")
+}
 
 // AC: Startup opens DB at the path, creating file + parent dir if absent, and
 // embedded migrations apply automatically (the expense table is queryable).

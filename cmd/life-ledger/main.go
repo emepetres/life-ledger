@@ -45,7 +45,6 @@ func main() {
 		log.Fatalf("opening database: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	log.Printf("database ready at %s", dbPath)
 
 	// Real authentication is always on (ADR-0004): identical path locally and in
 	// production, so the shipped auth is exercised in local QA too.
