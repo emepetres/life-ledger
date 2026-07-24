@@ -1,197 +1,146 @@
-# Deployment setup: GitHub Secrets & first deploy
+# Deployment setup: first deploy
 
-This guide configures everything the CI/CD and infra workflows need to deploy
-Life Ledger to Azure (ADR-0005): the OIDC trust between GitHub and Azure, the
-repository secrets/variables, and the one-time bootstrap. Run the steps once;
-after that, pushing to `main` deploys automatically.
+This guide stands up the entire Life Ledger deployment on Azure (ADR-0005): the
+OIDC trust between GitHub and Azure, the repository secrets/variables, and the
+one-time bootstrap. The whole runbook is encapsulated in
+[`scripts/first-deploy.ps1`](../../scripts/first-deploy.ps1) — run it once, then
+pushing to `main` deploys automatically.
 
 Prerequisites: the [`az`](https://learn.microsoft.com/cli/azure/install-azure-cli)
 and [`gh`](https://cli.github.com/) CLIs, logged in (`az login`, `gh auth login`),
 with permission to create an Entra app registration and assign roles on the
 subscription.
 
-Replace the placeholders as you go:
+## Quick start
+
+Copy the template, fill in your values, and run the script:
 
 ```pwsh
-$SUBSCRIPTION_ID = "<your-subscription-id>"
-$RESOURCE_GROUP   = "life-ledger-rg"
-$LOCATION         = "westeurope"
-$REPO             = "emepetres/life-ledger"     # owner/repo
-$APP_REG_NAME     = "jcarnero-life-ledger-github"
+Copy-Item .env.example .env
+# edit .env — see the table below
+pwsh scripts/first-deploy.ps1
 ```
 
-## 1. Resource group
+`.env` is gitignored; only `.env.example` is committed. The script is
+**idempotent** — running it twice creates no second app registration, no
+duplicate federated credential, and converges the repo secrets/variables to the
+same state — so it is safe to re-run after fixing a value or a transient failure.
+Pass `-Watch` to follow the bootstrap infra run to completion instead of
+returning after dispatching it.
 
-Created once so the deploy identity can be scoped to it (least privilege) rather
-than the whole subscription:
+### `.env` values
 
-```pwsh
-az account set --subscription $SUBSCRIPTION_ID
-az group create --name $RESOURCE_GROUP --location $LOCATION
-```
+| Value                      | Meaning                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `SUBSCRIPTION_ID`          | Azure subscription for the resource group and all resources.                                              |
+| `RESOURCE_GROUP`           | Resource group to create/reuse; the deploy identity is scoped here (least privilege).                     |
+| `LOCATION`                 | Azure region (e.g. `westeurope`).                                                                          |
+| `REPO`                     | GitHub repo as `owner/repo`.                                                                              |
+| `APP_REG_NAME`             | Display name of the Entra app registration; looked up by name and reused on re-run.                       |
+| `LIFELEDGER_PASSWORD_HASH` | bcrypt hash of the login password. **Leave empty** to have the script hash a password you type (first run only). |
+| `LIFELEDGER_SESSION_KEY`   | Session-cookie signing secret. **Leave empty** to have the script mint a random 32-byte key (first run only). |
 
-Register the `Microsoft.App` namespace on the subscription. The template deploys
-Azure Container Apps resources, which fail with `MissingSubscriptionRegistration`
-until the namespace is registered. This is a once-per-subscription operation that
-can take a couple of minutes:
+## What the script does
 
-```pwsh
-az provider register --namespace Microsoft.App
-az provider show --namespace Microsoft.App --query "registrationState"   # expect "Registered"
-```
+Each step below is idempotent; the section headings map to what you'd repair by
+hand if a step needs attention.
 
-## 2. Entra app registration + OIDC federation
+### 1. Resource group + provider registration
+
+Creates the resource group (so the deploy identity can be scoped to it rather
+than the whole subscription) and registers the `Microsoft.App` namespace, which
+Azure Container Apps resources require or they fail with
+`MissingSubscriptionRegistration`. Registration is once-per-subscription and can
+take a couple of minutes; the script polls until it reports `Registered`.
+
+### 2. Entra app registration + service principal + OIDC federation
 
 GitHub Actions authenticates to Azure with **OIDC federated identity** — no
-client secret is ever stored (ADR-0005). Create an app registration and a service
-principal for it (If you don't have permission to create an app registration, ask your Azure admin to do this step for you):
+client secret is ever stored (ADR-0005). The script looks up the app registration
+by `APP_REG_NAME` and reuses its `appId` (so re-runs never create a duplicate
+identity), ensures a service principal exists, and adds a **federated credential**
+trusting workflows on the `main` branch. That one subject covers both the
+`deploy` job (push to main) and the `infra` job (push and manual dispatch, both on
+`main`).
 
-```pwsh
-$APP_ID    = az ad app create --display-name $APP_REG_NAME --query appId -o tsv
-az ad sp create --id $APP_ID
-$TENANT_ID = az account show --query tenantId -o tsv
-```
-
-Add a **federated credential** trusting workflows that run on the `main` branch
-of the repo. This one subject covers the `deploy` job (push to main) and the
-`infra` job (push to main and manual dispatch, both of which run on `main`):
-
-```pwsh
-# Repositories created after 2026-07-15 emit immutable OIDC subjects that
-# include the owner and repository IDs (so a recycled repo/owner name can't be
-# reused to impersonate). Fetch those IDs from the GitHub API and build the
-# subject to match the exact token GitHub will present:
-#   repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/main
-$repoOwner, $repoName = $REPO -split '/', 2
-$ownerId = gh api "repos/$REPO" --jq '.owner.id'
-$repoId  = gh api "repos/$REPO" --jq '.id'
-# Use $($repoId) so the ':' after it isn't parsed as a PSDrive scope-qualifier
-# (like $env:PATH) — bare $repoId:ref... would resolve to empty.
-$subject = "repo:$repoOwner@$ownerId/$repoName@$($repoId):ref:refs/heads/main"
-
-$body = @'
-{
-  "name": "life-ledger-main",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "__SUBJECT__",
-  "audiences": ["api://AzureADTokenExchange"]
-}
-'@ -replace '__SUBJECT__', $subject
-
-$body | Out-File -FilePath .\fcred.json -Encoding utf8 -NoNewline
-az ad app federated-credential create --id $APP_ID --parameters "@.\fcred.json"
-Remove-Item .\fcred.json
-```
+Repositories created after 2026-07-15 emit **immutable OIDC subjects** that embed
+the owner and repository IDs (so a recycled repo/owner name can't impersonate the
+original). The script fetches those IDs from the GitHub API and builds the subject
+to match the exact token GitHub presents:
+`repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/main`. It looks the credential up
+by name (`life-ledger-main`) and skips creation if present — the one resource that
+errors on duplicate.
 
 > If you later deploy from GitHub **Environments** or tags, add more federated
-> credentials with the matching subject. Use the same
+> credentials with the matching subject, using the same
 > `OWNER@OWNER-ID/REPO@REPO-ID` form for the repo segment, e.g.
-> `repo:$repoOwner@$ownerId/$repoName@$repoId:environment:production`.
+> `…:environment:production`.
 
-## 3. Grant the identity rights on the resource group
+### 3. Role grants on the resource group
 
-The identity must create/manage resources **and** create the AcrPull role
-assignment the Bicep template declares. That second part needs role-assignment
-rights, so `Contributor` alone is not enough:
-
-```pwsh
-$SP_OBJECT_ID = az ad sp show --id $APP_ID --query id -o tsv
-$SCOPE = "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
-
-# Create and manage resources.
-az role assignment create --assignee-object-id $SP_OBJECT_ID `
-  --assignee-principal-type ServicePrincipal `
-  --role "Contributor" --scope $SCOPE
-
-# Create the app's AcrPull role assignment (Bicep does this on deploy).
-az role assignment create --assignee-object-id $SP_OBJECT_ID `
-  --assignee-principal-type ServicePrincipal `
-  --role "User Access Administrator" --scope $SCOPE
-```
-
+The identity must create/manage resources **and** create the AcrPull and Blob
+role assignments the Bicep template declares — that second part needs
+role-assignment rights, so `Contributor` alone is not enough. The script grants
+`Contributor` **and** `User Access Administrator`, scoped to the resource group.
 (For a personal project you may instead grant a single `Owner` on the group.)
 
-## 4. Generate the app secrets
+### 4. App secrets (ADR-0004)
 
-Both are required in production (ADR-0004):
+Both runtime secrets are required in production:
 
-- **`LIFELEDGER_PASSWORD_HASH`** — bcrypt hash of your chosen login password. The
-  plaintext is never stored:
+- **`LIFELEDGER_PASSWORD_HASH`** — bcrypt hash of your login password; the
+  plaintext is never stored. Set it in `.env`, or leave it empty and the script
+  prompts for a password and hashes it (via `go run ./cmd/hashpw`, same as
+  `make hash-password`).
+- **`LIFELEDGER_SESSION_KEY`** — the session-cookie signing secret. Set it in
+  `.env`, or leave it empty and the script mints a random 32-byte key. Rotating it
+  later logs you out everywhere.
 
-  ```pwsh
-  make hash-password     # prompts for the password, prints the hash
-  ```
+For an unpinned (empty) secret the script only generates it when the repo secret
+is **absent** — on a re-run it leaves the already-set secret in place. That is
+what keeps re-runs convergent: bcrypt re-hashes with a fresh salt and a new random
+session key would differ on every run (and rotating the session key logs everyone
+out). Pin a value in `.env` to force it to a specific known value instead.
 
-- **`LIFELEDGER_SESSION_KEY`** — the session-cookie signing secret. Any long
-  random string; rotating it later logs you out everywhere:
+### 5. Repository secrets and variables
 
-  ```pwsh
-  # Generate 32 cryptographically random bytes and return as Base64.
-  [Convert]::ToBase64String(
-    [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-  ```
+**Secrets** (sensitive): `AZURE_CLIENT_ID` (the app's `appId`), `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`, `LIFELEDGER_PASSWORD_HASH`, `LIFELEDGER_SESSION_KEY`.
 
-## 5. Set repository secrets and variables
+**Variables** (non-sensitive config): `AZURE_RESOURCE_GROUP`, `AZURE_LOCATION`.
 
-**Secrets** (sensitive; `gh secret set` reads the value from the prompt/stdin):
+All are set via `gh secret set` / `gh variable set`, which are create-or-update,
+so re-running the script just overwrites them with the current values.
 
-| Secret                     | Value                        |
-| -------------------------- | ---------------------------- |
-| `AZURE_CLIENT_ID`          | the `$APP_ID` from step 2    |
-| `AZURE_TENANT_ID`          | the `$TENANT_ID` from step 2 |
-| `AZURE_SUBSCRIPTION_ID`    | your `$SUBSCRIPTION_ID`      |
-| `LIFELEDGER_PASSWORD_HASH` | the bcrypt hash from step 4  |
-| `LIFELEDGER_SESSION_KEY`   | the random key from step 4   |
+### 6. Bootstrap infra run
 
-**Variables** (non-sensitive config):
-
-| Variable               | Value                                     |
-| ---------------------- | ----------------------------------------- |
-| `AZURE_RESOURCE_GROUP` | `life-ledger-rg` (your `$RESOURCE_GROUP`) |
-| `AZURE_LOCATION`       | `westeurope` (your `$LOCATION`)           |
-
-```pwsh
-# Pipe variables directly to stdout; gh secret set reads the value from stdin.
-$APP_ID          | gh secret set AZURE_CLIENT_ID       --repo $REPO
-$TENANT_ID       | gh secret set AZURE_TENANT_ID       --repo $REPO
-$SUBSCRIPTION_ID | gh secret set AZURE_SUBSCRIPTION_ID --repo $REPO
-gh secret set LIFELEDGER_PASSWORD_HASH --repo $REPO   # paste the hash
-gh secret set LIFELEDGER_SESSION_KEY   --repo $REPO   # paste the key
-
-gh variable set AZURE_RESOURCE_GROUP --repo $REPO --body $RESOURCE_GROUP
-gh variable set AZURE_LOCATION       --repo $REPO --body $LOCATION
-```
-
-## 6. First deploy (bootstrap order)
-
-The registry is empty until CD runs, but the Container App can't start on an
+ACR is empty until CD runs, but the Container App can't be created pointing at an
 image that doesn't exist yet. So the **first** infra run uses a public placeholder
-image; CD then replaces it (ADR-0005).
+image (`mcr.microsoft.com/k8se/quickstart:latest`) that needs no ACR pull — this
+dodges the AcrPull chicken-and-egg while the role assignment propagates. The
+script dispatches the `infra` workflow with that image and a **bootstrap probe
+override** (`bootstrapProbePath=/`, `bootstrapProbePort=80`) matching the endpoint
+the placeholder actually serves, so the first revision reaches **healthy in
+minutes** rather than failing the production `/health:8080` probe.
 
-1. **Provision infra with the placeholder.** Run the `infra` workflow manually,
-   setting the bootstrap input:
+The steady-state probe is unchanged: the Bicep `bootstrapProbePath` /
+`bootstrapProbePort` params default to `/health` and `8080`, and every later apply
+omits the override, so the probe **reverts automatically** to `/health:8080`
+against the real image. The concession never weakens production health checking.
+
+After the script dispatches the run:
+
+1. **Watch it provision** (ACR, storage, environment, Container App on the
+   placeholder, AcrPull + Blob role assignments):
 
    ```pwsh
-   gh workflow run infra.yml --repo $REPO `
-     -f containerImage="mcr.microsoft.com/k8se/quickstart:latest"
+   gh run watch --repo $REPO
    ```
 
-   This creates the ACR, storage, environment, and the Container App (running the
-   placeholder), and assigns AcrPull to the app's identity.
-
-   > **Note: this run is expected to fail ~33 minutes after it starts.** The
-   > placeholder image (`mcr.microsoft.com/k8se/quickstart:latest`) does not serve
-   > the `/health` endpoint on port 8080 that the liveness and readiness probes in
-   > `infra/main.bicep` require. Container Apps holds the revision-provision window
-   > open for ~30 minutes while the probes continually fail, then emits
-   > `Operation expired` and the deploy step exits 1. This is safe to ignore: the
-   > Container App resource is already created, and the next step (`ci-cd.yml`)
-   > replaces the placeholder with the real app image that does implement
-   > `/health` on `:8080`, after which subsequent redeploys and infra runs
-   > provision normally.
-
-2. **Deploy the real app.** Push to `main` (or re-run `ci-cd.yml`). CD builds the
-   image, pushes `:latest` + `:<sha>` to ACR, and rolls the app onto it.
+2. **Deploy the real app.** Push to `main` (which runs `ci-cd.yml`). CD builds the
+   image, pushes `:latest` + `:<sha>` to ACR, and rolls the app onto it. From here
+   the app serves `/health` on `:8080`; the next infra apply reverts the bootstrap
+   probe.
 
 3. **Verify.** The app URL is an output of the infra deployment:
 
@@ -202,12 +151,14 @@ image; CD then replaces it (ADR-0005).
 
 From here on, every push to `main` deploys automatically (gated on tests), and
 infra changes apply when `infra/**` changes or you dispatch `infra.yml` — with an
-**empty** `containerImage`, so it keeps the image CD deployed.
+**empty** `containerImage` (and empty bootstrap probe inputs), so it keeps the
+image CD deployed and the production probe.
 
 ## Rotating secrets later
 
-- **Password / session key**: update the GitHub Secret, then re-run `infra.yml`
-  (it rewrites the ACA secrets from the Bicep params). Rotating the session key
-  logs you out everywhere — that is the intended "log out everywhere" lever.
-- **Azure identity**: add or replace the federated credential (step 2); no secret
-  to rotate because none is stored.
+- **Password / session key**: update the GitHub Secret (or re-run the script with
+  new `.env` values), then re-run `infra.yml` (it rewrites the ACA secrets from
+  the Bicep params). Rotating the session key logs you out everywhere — that is
+  the intended "log out everywhere" lever.
+- **Azure identity**: add or replace the federated credential (re-run the script,
+  or step 2 by hand); no secret to rotate because none is stored.

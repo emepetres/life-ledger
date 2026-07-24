@@ -11,7 +11,7 @@
 //
 // The two runtime secrets are passed in as @secure() parameters from GitHub
 // Secrets by the workflow; they are never committed. See docs/deployment/
-// github-secrets.md.
+// first-deploy.md.
 
 targetScope = 'resourceGroup'
 
@@ -34,6 +34,20 @@ param sessionKey string
 
 @description('IANA timezone selecting the embedded zoneinfo so "today" is the local calendar day (ADR-0005).')
 param timeZone string = 'Europe/Madrid'
+
+// The production health probe is /health on :8080, served by the real image. The
+// first-run bootstrap placeholder (containerImage) does not serve that endpoint,
+// so it would fail readiness/liveness for ~30 minutes. These two params let the
+// first-deploy run point the probe at an endpoint the placeholder DOES answer
+// (e.g. / on :80). They default to the production values, so any later apply that
+// omits them (steady state) automatically reverts the probe to /health:8080 — the
+// concession never weakens production health checking. See
+// docs/deployment/first-deploy.md.
+@description('First-run bootstrap only: HTTP probe path for the placeholder image. Defaults to the production /health; leave default on every apply after the first so the probe reverts.')
+param bootstrapProbePath string = '/health'
+
+@description('First-run bootstrap only: HTTP probe port for the placeholder image. Defaults to the production 8080; leave default after the first apply.')
+param bootstrapProbePort int = 8080
 
 // --- derived names -----------------------------------------------------------
 
@@ -216,8 +230,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               type: 'Liveness'
               httpGet: {
-                path: '/health'
-                port: 8080
+                // Steady state: /health on :8080 (params default there). Only the
+                // first-run bootstrap overrides these to match the placeholder.
+                path: bootstrapProbePath
+                port: bootstrapProbePort
               }
               initialDelaySeconds: 3
               periodSeconds: 10
@@ -225,8 +241,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               type: 'Readiness'
               httpGet: {
-                path: '/health'
-                port: 8080
+                path: bootstrapProbePath
+                port: bootstrapProbePort
               }
               initialDelaySeconds: 3
               periodSeconds: 10

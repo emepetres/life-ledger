@@ -15,6 +15,14 @@ on:
         description: "First-run bootstrap only: set to mcr.microsoft.com/k8se/quickstart:latest before any image exists in ACR. Leave empty afterwards."
         required: false
         default: ""
+      bootstrapProbePath:
+        description: "First-run bootstrap only: HTTP probe path the placeholder answers (e.g. /). Leave empty afterwards so the probe reverts to /health."
+        required: false
+        default: ""
+      bootstrapProbePort:
+        description: "First-run bootstrap only: HTTP probe port the placeholder listens on (e.g. 80). Leave empty afterwards so the probe reverts to 8080."
+        required: false
+        default: ""
   # # push:
   # #   branches: [main]
   # #   paths:
@@ -36,6 +44,8 @@ jobs:
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       LOCATION: ${{ vars.AZURE_LOCATION }}
       CONTAINER_IMAGE: ${{ github.event.inputs.containerImage }}
+      BOOTSTRAP_PROBE_PATH: ${{ github.event.inputs.bootstrapProbePath }}
+      BOOTSTRAP_PROBE_PORT: ${{ github.event.inputs.bootstrapProbePort }}
       PASSWORD_HASH: ${{ secrets.LIFELEDGER_PASSWORD_HASH }}
       SESSION_KEY: ${{ secrets.LIFELEDGER_SESSION_KEY }}
     steps:
@@ -49,11 +59,22 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # The resource group is created once during setup (see
-      # docs/deployment/github-secrets.md) so the deploy identity can be scoped to
-      # the group rather than the whole subscription.
+      # docs/deployment/first-deploy.md, scripts/first-deploy.ps1) so the deploy
+      # identity can be scoped to the group rather than the whole subscription.
       - name: Deploy Bicep
         run: |
           set -euo pipefail
+          # Only forward the bootstrap probe overrides when the operator set them
+          # (first run). Left empty, the Bicep defaults (/health:8080) apply, so a
+          # steady-state re-apply automatically reverts the probe. An empty string
+          # would set an invalid path and fail the int port param, so we omit them.
+          probe_params=()
+          if [ -n "$BOOTSTRAP_PROBE_PATH" ]; then
+            probe_params+=(bootstrapProbePath="$BOOTSTRAP_PROBE_PATH")
+          fi
+          if [ -n "$BOOTSTRAP_PROBE_PORT" ]; then
+            probe_params+=(bootstrapProbePort="$BOOTSTRAP_PROBE_PORT")
+          fi
           az deployment group create \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
@@ -61,4 +82,5 @@ jobs:
               location="$LOCATION" \
               containerImage="$CONTAINER_IMAGE" \
               passwordHash="$PASSWORD_HASH" \
-              sessionKey="$SESSION_KEY"
+              sessionKey="$SESSION_KEY" \
+              "${probe_params[@]}"

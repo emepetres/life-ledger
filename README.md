@@ -68,9 +68,31 @@ shipped by GitHub Actions (ADR-0005):
 - Infrastructure is applied by a separate workflow on `infra/**` changes or manual
   dispatch.
 
-First-time setup (OIDC trust, GitHub Secrets, bootstrap) is documented in
-[docs/deployment/github-secrets.md](docs/deployment/github-secrets.md). The
-overall system — modules, request flow, and deployment topology — is in
+First-time setup (OIDC trust, GitHub Secrets, bootstrap) is a single script,
+[`scripts/first-deploy.ps1`](scripts/first-deploy.ps1), driven by a `.env` file
+(copy [`.env.example`](.env.example)):
+
+```pwsh
+Copy-Item .env.example .env   # then fill it in
+pwsh scripts/first-deploy.ps1
+```
+
+The `.env` it reads (see [`.env.example`](.env.example)):
+
+| Value                      | Meaning                                                                          |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `SUBSCRIPTION_ID`          | Azure subscription for the resource group and all resources.                     |
+| `RESOURCE_GROUP`           | Resource group to create/reuse; the deploy identity is scoped here.              |
+| `LOCATION`                 | Azure region (e.g. `westeurope`).                                                 |
+| `REPO`                     | GitHub repo as `owner/repo`.                                                      |
+| `APP_REG_NAME`             | Entra app-registration display name; looked up by name and reused on re-run.     |
+| `LIFELEDGER_PASSWORD_HASH` | bcrypt login-password hash. Empty ⇒ the script hashes a password you type.       |
+| `LIFELEDGER_SESSION_KEY`   | Session-cookie signing secret. Empty ⇒ the script mints a random key.            |
+
+The script is idempotent — safe to re-run. Full walkthrough (and how to repair
+any step by hand) in
+[docs/deployment/first-deploy.md](docs/deployment/first-deploy.md). The overall
+system — modules, request flow, and deployment topology — is in
 [docs/architecture.md](docs/architecture.md).
 
 ## Test

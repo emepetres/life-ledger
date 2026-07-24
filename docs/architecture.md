@@ -158,7 +158,7 @@ flowchart LR
   Bicep apply.
 - **Auth to Azure**: OIDC federated identity — no long-lived secret in GitHub.
 - **Secrets**: the app's `LIFELEDGER_PASSWORD_HASH` and `LIFELEDGER_SESSION_KEY`
-  reach the container as ACA secrets. Setup: [docs/deployment/github-secrets.md](deployment/github-secrets.md).
+  reach the container as ACA secrets. Setup: [docs/deployment/first-deploy.md](deployment/first-deploy.md).
 
 ## Configuration surface
 
