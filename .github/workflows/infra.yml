@@ -15,11 +15,11 @@ on:
         description: "First-run bootstrap only: set to a public image that serves /health on :8080 (e.g. mendhak/http-https-echo) before any image exists in ACR. Leave empty afterwards."
         required: false
         default: ""
-  # # push:
-  # #   branches: [main]
-  # #   paths:
-  # #     - 'infra/**'
-  # #     - '.github/workflows/infra.yml'
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra.yml"
 
 permissions:
   id-token: write # OIDC federated login to Azure (ADR-0005)

@@ -1,38 +1,31 @@
 # CI/CD for Life Ledger (ADR-0005).
 #
 # One gated workflow: the `test` job runs on every pull request and every push
-# to main; the `deploy` job runs only on push to main and only after `test`
-# passes, so main is never deployed red. Infrastructure is managed separately
-# (infra.yml) — this workflow only builds the image and rolls a new revision.
+# to main; the `deploy` job runs only on push to main, only after `test` passes,
+# and only when image-affecting files changed. Infrastructure is managed
+# separately (infra.yml) — this workflow only builds the image and rolls a new
+# revision.
 #
-# paths-ignore: docs/markdown-only, infra, and agent-config changes can't affect
-# the build, tests, or deployed image. Infra changes run their own workflow
-# (infra.yml). When ALL changed files match an ignore glob, this workflow is
-# skipped; a mixed change (e.g. code + a README tweak) still runs it.
+# Deploy gate: rather than a whole-workflow `paths-ignore` skip (which would also
+# skip `test` and leave the required check unreported on doc-only PRs), the
+# `changes` job computes — with a `git diff` step — whether any image-affecting
+# file changed. Docs-only / infra-only pushes still run `test` but roll no
+# revision; a mixed code+doc push deploys because code changed. The ignore set
+# below mirrors ADR-0005.
+#
+# Secret-drift discipline: CD only ever runs `az containerapp update --image`.
+# It must never mutate env vars or ACA secrets, or it would orphan the
+# Bicep-declared config (Bicep is the single source of truth — ADR-0005). The
+# `test` job carries a guard step that fails if this file gains an
+# env-/secret-mutating flag, so the discipline is enforced by the pipeline.
 
 name: ci-cd
 
 on:
-  # # pull_request:
-  # #   branches: [main]
-  # #   paths-ignore:
-  # #     - "**/*.md"
-  # #     - "docs/**"
-  # #     - "infra/**"
-  # #     - ".github/workflows/infra.yml"
-  # #     - ".agents/**"
-  # #     - ".claude/**"
-  # #     - "manual-process-samples/**"
-  # # push:
-  # #   branches: [main]
-  # #   paths-ignore:
-  # #     - "**/*.md"
-  # #     - "docs/**"
-  # #     - "infra/**"
-  # #     - ".github/workflows/infra.yml"
-  # #     - ".agents/**"
-  # #     - ".claude/**"
-  # #     - "manual-process-samples/**"
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -62,10 +55,85 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # Secret-drift guard (ADR-0005). CD must only ever roll the image; if this
+      # file gains an env-/secret-mutating flag it would orphan the Bicep-declared
+      # config. Comment lines are stripped first, so a comment that mentions a
+      # flag can't false-fail the build; the flag list is assembled from fragments
+      # so the guard's own text never contains the literal `--<flag>` it scans for
+      # (no self-match).
+      - name: Guard - CD must not mutate env or secrets
+        run: |
+          set -euo pipefail
+          flags='set-env-vars|replace-env-vars|remove-env-vars|remove-all-env-vars|secrets'
+          if grep -vE '^[[:space:]]*#' .github/workflows/ci-cd.yml \
+               | grep -nE "\-\-($flags)|containerapp[[:space:]]+secret"; then
+            echo "::error::CD may only run 'az containerapp update --image ...'. Env vars and ACA secrets are Bicep-declared (ADR-0005); mutating them here would orphan that config. Change the value in infra/ and let infra.yml apply it."
+            exit 1
+          fi
+
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    # Only the push-to-main deploy path consumes this; PRs never deploy.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      image: ${{ steps.filter.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the pushed range's history for `git diff before..after`.
+          fetch-depth: 0
+
+      - name: Detect image-affecting changes
+        id: filter
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          zero="0000000000000000000000000000000000000000"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ] \
+             || ! git rev-parse -q --verify "$BEFORE^{commit}" >/dev/null; then
+            # First push, new branch, or a force-push whose old tip is no longer
+            # reachable: fall back to the parent if there is one, else treat
+            # everything as changed (fail toward deploying, never silently skip).
+            if git rev-parse -q --verify "$AFTER^" >/dev/null; then
+              changed=$(git diff --name-only "$AFTER^" "$AFTER")
+            else
+              changed=$(git ls-tree -r --name-only "$AFTER")
+            fi
+          else
+            changed=$(git diff --name-only "$BEFORE" "$AFTER")
+          fi
+
+          echo "Changed files:"
+          echo "$changed"
+
+          # A file is image-affecting unless it matches an ignore glob. `case`
+          # patterns use `*` which spans `/`, so `*.md` == `**/*.md` and
+          # `docs/*` == `docs/**`.
+          image=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              *.md) ;;
+              docs/*) ;;
+              infra/*) ;;
+              .github/workflows/infra.yml) ;;
+              .agents/*) ;;
+              .claude/*) ;;
+              manual-process-samples/*) ;;
+              *) image=true; break ;;
+            esac
+          done <<< "$changed"
+
+          echo "image-affecting=$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
   deploy:
     name: deploy
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, changes]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.image == 'true'
     runs-on: ubuntu-latest
     # Serialise production deploys so two pushes can't race on the single revision.
     concurrency:
