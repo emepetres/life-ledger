@@ -35,12 +35,13 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $FederatedCredentialName = 'life-ledger-main'
-$BootstrapImage = 'mcr.microsoft.com/k8se/quickstart:latest'
-# The bootstrap placeholder serves an HTML page on :80, not /health on :8080, so
-# the first infra run points the probe here; steady-state applies omit these and
-# the Bicep defaults revert the probe to /health:8080 (infra/main.bicep).
-$BootstrapProbePath = '/'
-$BootstrapProbePort = '80'
+# Public placeholder for the first infra run, before any image exists in ACR.
+# It listens on :8080 and answers any path (incl. /health) with 200, so it
+# satisfies the SAME probe the real image does (/health:8080) — the first
+# revision goes healthy in minutes and, crucially, CD's later image swap keeps
+# the same probe, so it stays healthy with no probe change or infra re-run. Needs
+# no ACR pull, so it also dodges the AcrPull chicken-and-egg (ADR-0005).
+$BootstrapImage = 'mendhak/http-https-echo:latest'
 
 function Read-DotEnv {
     param([Parameter(Mandatory)][string]$Path)
@@ -277,15 +278,12 @@ Write-Host "  variables set"
 
 # ACR is empty until CD runs, but the Container App can't be created on an image
 # that doesn't exist yet. So the first infra run uses a public placeholder that
-# needs no ACR pull (dodging the AcrPull chicken-and-egg) AND answers the probe
-# on / :80, so the revision reaches healthy in minutes instead of failing the
-# /health:8080 probe for ~30. CD then replaces it with the real image and the
-# probe reverts to /health:8080 on the next apply (ADR-0005).
+# needs no ACR pull (dodging the AcrPull chicken-and-egg) AND answers /health on
+# :8080, so the revision reaches healthy in minutes on the SAME probe production
+# uses. CD then swaps in the real image without touching the probe, so it stays
+# healthy — no probe override, no infra re-run needed (ADR-0005).
 Write-Step "Kicking off the bootstrap infra run"
-gh workflow run infra.yml --repo $Repo `
-    -f containerImage="$BootstrapImage" `
-    -f bootstrapProbePath="$BootstrapProbePath" `
-    -f bootstrapProbePort="$BootstrapProbePort"
+gh workflow run infra.yml --repo $Repo -f containerImage="$BootstrapImage"
 Write-Host "  dispatched infra.yml with the health-serving placeholder"
 
 if ($Watch) {
@@ -312,8 +310,8 @@ Write-Host @"
 
   2. Deploy the real app. Push to main (or run the ci-cd workflow on push). CD
      builds the image, pushes :latest + :<sha> to ACR, and rolls the app onto
-     it — after which the probe serves /health on :8080 and a later infra apply
-     reverts the bootstrap probe automatically.
+     it. The probe is /health:8080 throughout — the placeholder already answered
+     it, so the swap stays healthy with no further infra run.
 
   3. Get the app URL:
 

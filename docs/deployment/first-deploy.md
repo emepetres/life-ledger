@@ -116,17 +116,20 @@ so re-running the script just overwrites them with the current values.
 
 ACR is empty until CD runs, but the Container App can't be created pointing at an
 image that doesn't exist yet. So the **first** infra run uses a public placeholder
-image (`mcr.microsoft.com/k8se/quickstart:latest`) that needs no ACR pull — this
-dodges the AcrPull chicken-and-egg while the role assignment propagates. The
-script dispatches the `infra` workflow with that image and a **bootstrap probe
-override** (`bootstrapProbePath=/`, `bootstrapProbePort=80`) matching the endpoint
-the placeholder actually serves, so the first revision reaches **healthy in
-minutes** rather than failing the production `/health:8080` probe.
+image (`mendhak/http-https-echo`) that needs no ACR pull — this dodges the AcrPull
+chicken-and-egg while the role assignment propagates. Crucially, that image
+listens on `:8080` and answers **any** path (including `/health`) with `200`, so
+it satisfies the *same* probe the real image does. The first revision reaches
+**healthy in minutes** on the production `/health:8080` probe — no probe override,
+no ~33-minute readiness failure.
 
-The steady-state probe is unchanged: the Bicep `bootstrapProbePath` /
-`bootstrapProbePort` params default to `/health` and `8080`, and every later apply
-omits the override, so the probe **reverts automatically** to `/health:8080`
-against the real image. The concession never weakens production health checking.
+Because the probe never changes, CD's later image swap "just works": `ci-cd.yml`
+runs `az containerapp update --image <real>`, which touches only the image and
+leaves the probe at `/health:8080` — which the real image serves. No infra re-run
+is needed to make the real app healthy, and production health checking is never
+weakened. (This is why a health-serving placeholder is used rather than bending
+the probe to the placeholder: a probe concession would break across the CD image
+swap, moving the readiness failure from the infra step to the CD step.)
 
 After the script dispatches the run:
 
@@ -138,9 +141,8 @@ After the script dispatches the run:
    ```
 
 2. **Deploy the real app.** Push to `main` (which runs `ci-cd.yml`). CD builds the
-   image, pushes `:latest` + `:<sha>` to ACR, and rolls the app onto it. From here
-   the app serves `/health` on `:8080`; the next infra apply reverts the bootstrap
-   probe.
+   image, pushes `:latest` + `:<sha>` to ACR, and rolls the app onto it. The probe
+   stays `/health:8080` throughout, so the swap comes up healthy directly.
 
 3. **Verify.** The app URL is an output of the infra deployment:
 
@@ -151,8 +153,7 @@ After the script dispatches the run:
 
 From here on, every push to `main` deploys automatically (gated on tests), and
 infra changes apply when `infra/**` changes or you dispatch `infra.yml` — with an
-**empty** `containerImage` (and empty bootstrap probe inputs), so it keeps the
-image CD deployed and the production probe.
+**empty** `containerImage`, so it keeps the image CD deployed.
 
 ## Rotating secrets later
 
