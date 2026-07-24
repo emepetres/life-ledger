@@ -39,8 +39,9 @@ $FederatedCredentialName = 'life-ledger-main'
 # It listens on :8080 and answers any path (incl. /health) with 200, so it
 # satisfies the SAME probe the real image does (/health:8080) — the first
 # revision goes healthy in minutes and, crucially, CD's later image swap keeps
-# the same probe, so it stays healthy with no probe change or infra re-run. Needs
-# no ACR pull, so it also dodges the AcrPull chicken-and-egg (ADR-0005).
+# the same probe, so it stays healthy with no probe change or infra re-run. It
+# only makes the app bootable before ACR has an image; ACR pull auth is handled
+# by the user-assigned identity granted AcrPull before the app (ADR-0006).
 $BootstrapImage = 'mendhak/http-https-echo:latest'
 
 function Read-DotEnv {
@@ -278,10 +279,10 @@ Write-Host "  variables set"
 
 # ACR is empty until CD runs, but the Container App can't be created on an image
 # that doesn't exist yet. So the first infra run uses a public placeholder that
-# needs no ACR pull (dodging the AcrPull chicken-and-egg) AND answers /health on
-# :8080, so the revision reaches healthy in minutes on the SAME probe production
-# uses. CD then swaps in the real image without touching the probe, so it stays
-# healthy — no probe override, no infra re-run needed (ADR-0005).
+# answers /health on :8080, so the revision reaches healthy in minutes on the
+# SAME probe production uses. CD then swaps in the real image without touching the
+# probe, so it stays healthy — no probe override, no infra re-run needed. ACR pull
+# auth is via the user-assigned identity, granted AcrPull before the app (ADR-0006).
 Write-Step "Kicking off the bootstrap infra run"
 gh workflow run infra.yml --repo $Repo -f containerImage="$BootstrapImage"
 Write-Host "  dispatched infra.yml with the health-serving placeholder"

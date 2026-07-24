@@ -116,12 +116,18 @@ so re-running the script just overwrites them with the current values.
 
 ACR is empty until CD runs, but the Container App can't be created pointing at an
 image that doesn't exist yet. So the **first** infra run uses a public placeholder
-image (`mendhak/http-https-echo`) that needs no ACR pull — this dodges the AcrPull
-chicken-and-egg while the role assignment propagates. Crucially, that image
+image (`mendhak/http-https-echo`) that lives on Docker Hub. Crucially, that image
 listens on `:8080` and answers **any** path (including `/health`) with `200`, so
 it satisfies the *same* probe the real image does. The first revision reaches
 **healthy in minutes** on the production `/health:8080` probe — no probe override,
 no ~33-minute readiness failure.
+
+The placeholder makes the app *bootable* before ACR has an image, but it does not
+avoid ACR authentication: ACA still constructs the pull secret for the ACR entry
+in the app's `registries` block at provision time, whatever image runs. That is
+why the app pulls with a **user-assigned** managed identity granted `AcrPull`
+*before* it is created ([ADR-0006](../adr/0006-user-assigned-identity-for-acr-pull.md)) —
+a system-assigned identity deadlocked the first deploy.
 
 Because the probe never changes, CD's later image swap "just works": `ci-cd.yml`
 runs `az containerapp update --image <real>`, which touches only the image and

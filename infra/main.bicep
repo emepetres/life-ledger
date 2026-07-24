@@ -44,6 +44,7 @@ var backupContainerName = 'ledgerbackup'
 var envName = '${baseName}-env'
 var appName = baseName
 var logName = '${baseName}-logs'
+var uamiName = '${baseName}-id'
 
 // Default the running image to the ACR "latest" tag. CD pushes both :latest and
 // :<git-sha>, so reapplying this template never clobbers what CD deployed
@@ -57,6 +58,22 @@ var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 // Storage Blob Data Contributor built-in role, granted to the app's managed
 // identity so it can read/write the backup blob with no stored account key.
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+// --- user-assigned identity --------------------------------------------------
+
+// The app pulls from ACR and reaches Blob with a *user-assigned* managed identity
+// (ADR-0006), not a system-assigned one. ACA constructs the pull secret for every
+// registry in the app's `registries` block at revision-provision time, so the
+// identity must already hold AcrPull when the app first provisions. A
+// system-assigned identity can't: its principal only exists once the app is
+// created, so the AcrPull grant necessarily follows the very provision it needs
+// to unblock — an unbreakable first-deploy deadlock. A user-assigned identity is
+// a standalone resource that pre-exists the app and is granted below, before the
+// app depends on those grants.
+resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: uamiName
+  location: location
+}
 
 // --- container registry ------------------------------------------------------
 
@@ -135,8 +152,18 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${uami.id}': {}
+    }
   }
+  // Provision only after the identity holds AcrPull + Blob: ACA validates the
+  // ACR registry secret during the app's first provision, which needs AcrPull
+  // already granted (ADR-0006).
+  dependsOn: [
+    acrPull
+    blobContributor
+  ]
   properties: {
     managedEnvironmentId: env.id
     configuration: {
@@ -154,7 +181,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: acr.properties.loginServer
-          identity: 'system'
+          identity: uami.id
         }
       ]
       secrets: [
@@ -196,6 +223,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'TZ'
               value: timeZone
+            }
+            {
+              // Selects the user-assigned identity for the Blob backup's
+              // DefaultAzureCredential (ADR-0006). Without it the credential
+              // would look for a system-assigned identity, which the app no
+              // longer has. ACR pull is wired separately via registries[].identity.
+              name: 'AZURE_CLIENT_ID'
+              value: uami.properties.clientId
             }
             {
               name: 'LIFELEDGER_PASSWORD_HASH'
@@ -252,30 +287,31 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
-// Grant the app's managed identity permission to pull from ACR. On the very
-// first deploy the app runs a public placeholder image (containerImage param),
-// so it does not pull from ACR before this assignment has propagated; CD then
-// updates it to the real ACR image (ADR-0005).
+// Grant the user-assigned identity permission to pull from ACR. Assigned to the
+// UAMI (not the app), so it carries no dependency on the app and is in place
+// before the app provisions — which is what breaks the first-deploy deadlock the
+// system-assigned identity caused (ADR-0006). The app dependsOn this assignment.
 resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, app.id, acrPullRoleId)
+  name: guid(acr.id, uami.id, acrPullRoleId)
   scope: acr
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId: app.identity.principalId
+    principalId: uami.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
-// Grant the app's managed identity read/write on the backup container, so the
+// Grant the user-assigned identity read/write on the backup container, so the
 // store's Blob sink authenticates with the identity instead of an account key.
 // Scoped to the storage account (which now holds only this backup container),
-// parallel to the AcrPull assignment above.
+// parallel to the AcrPull assignment above. On the same UAMI as AcrPull so the
+// app carries a single identity (ADR-0006).
 resource blobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, app.id, blobContributorRoleId)
+  name: guid(storage.id, uami.id, blobContributorRoleId)
   scope: storage
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
-    principalId: app.identity.principalId
+    principalId: uami.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
