@@ -161,6 +161,7 @@ flowchart LR
 | --- | --- | --- |
 | `LIFELEDGER_ADDR` | default `:8080` | Listen address. |
 | `LIFELEDGER_DB_PATH` | Bicep → `/data/expenses.db` | SQLite file on the mounted volume. |
+| `LIFELEDGER_BACKUP_BLOB_URL` | Bicep → storage container URL | Azure Blob container for backup-on-write / restore-on-boot (managed identity). Unset locally/CI → no sink, pure local file, no Azure call. |
 | `LIFELEDGER_PASSWORD_HASH` | ACA secret | bcrypt hash of the shared password (required). |
 | `LIFELEDGER_SESSION_KEY` | ACA secret | Session-cookie signing secret (required in prod). |
 | `LIFELEDGER_SECURE_COOKIE` | Bicep → `true` | `Secure` flag on the session cookie. |
