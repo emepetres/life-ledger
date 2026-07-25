@@ -143,6 +143,7 @@ flowchart LR
         main["Push to main"]
         cicd["ci-cd.yml<br/>test → deploy (gated)"]
         infra["infra.yml<br/>Bicep (separate)"]
+        backupcron["backup.yml<br/>nightly cron 0 1 * * * UTC<br/>gate → copy → prune (ADR-0007)"]
     end
 
     subgraph AZ["Azure — West Europe"]
@@ -151,7 +152,8 @@ flowchart LR
             app["Container App<br/>min 1 / max 1<br/>ingress :8080, /health probe"]
             data["EmptyDir volume<br/>/data (SQLite + WAL)"]
         end
-        blob["Blob container<br/>backup snapshot"]
+        blob["ledgerbackup container<br/>live backup snapshot (expenses.db)"]
+        snaps["ledgersnapshots container<br/>daily/ (7-day) + monthly/ (forever)"]
     end
 
     pr --> cicd
@@ -161,16 +163,29 @@ flowchart LR
     cicd -->|"az containerapp update → new revision"| app
     app -->|"managed-identity pull"| acr
     app -->|"volume mount"| data
-    app -->|"backup-on-write / restore-on-boot<br/>(managed-identity Blob access)"| blob
+    app -->|"backup-on-write / restore-on-boot<br/>(UAMI, scoped to ledgerbackup)"| blob
+    backupcron -->|"OIDC login, read src (Reader)"| blob
+    backupcron -->|"gated blob-to-blob copy + prune<br/>(OIDC, Contributor on dest)"| snaps
     infra -.->|"provisions"| acr
     infra -.->|"provisions"| ENV
     infra -.->|"provisions"| blob
+    infra -.->|"provisions"| snaps
 ```
 
 - **CI/CD** (`ci-cd.yml`): one gated workflow — tests run on every PR and push to
   main; deploy runs only on push to main, only after tests pass.
 - **Infra** (`infra.yml`): separate, on dispatch or `infra/**` changes; idempotent
   Bicep apply.
+- **Nightly retained backup** (`backup.yml`, ADR-0007): a third workflow on a
+  `0 1 * * *` UTC cron (plus dispatch). It integrity-checks the live
+  `ledgerbackup/expenses.db`, and only if that passes, server-side-copies it into
+  the **`ledgersnapshots`** container as `daily/YYYY-MM-DD.db` (plus
+  `monthly/YYYY-MM.db` on month boundaries), then prunes dailies older than 7 days
+  — month-ends are kept forever. It authenticates with the *same* OIDC federated
+  identity as CD; the app's own Blob grant is scoped down to `ledgerbackup` so a
+  buggy app build cannot reach the history. A failed integrity check skips the
+  copy, freezes the prune, and raises a sticky `backup-alarm` issue. Recovery is
+  operator-driven via the **[restore runbook](deployment/restore-runbook.md)**.
 - **Auth to Azure**: OIDC federated identity — no long-lived secret in GitHub.
 - **Secrets**: the app's `LIFELEDGER_PASSWORD_HASH` and `LIFELEDGER_SESSION_KEY`
   reach the container as ACA secrets. Setup: [docs/deployment/first-deploy.md](deployment/first-deploy.md).
@@ -194,3 +209,7 @@ flowchart LR
 - [ADR-0003](adr/0003-persistence-and-storage.md) — persistence & storage (SQLite)
 - [ADR-0004](adr/0004-access-model-auth.md) — access model / auth
 - [ADR-0005](adr/0005-deploy-azure-cicd.md) — deploy to Azure via Bicep + GitHub Actions
+- [ADR-0006](adr/0006-user-assigned-identity-for-acr-pull.md) — user-assigned identity for ACR pull
+- [ADR-0007](adr/0007-scheduled-retained-backup.md) — scheduled retained backup + restore runbook
+
+Operational runbooks live in [docs/deployment/](deployment/): [first-deploy.md](deployment/first-deploy.md) and [restore-runbook.md](deployment/restore-runbook.md).
