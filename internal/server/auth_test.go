@@ -112,7 +112,7 @@ func TestHealthAndStaticReachableWithoutSession(t *testing.T) {
 	ts := newGuardedServer(t)
 	client := noRedirectClient()
 
-	for _, path := range []string{"/health", "/static/style.css"} {
+	for _, path := range []string{"/health", "/static/style.css", "/static/favicon.svg"} {
 		resp, err := client.Get(ts.URL + path)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)

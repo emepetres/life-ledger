@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "life-ledger",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/life-ledger"],
+      "port": 8080
+    }
+  ]
+}
