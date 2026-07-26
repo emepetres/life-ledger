@@ -268,6 +268,9 @@ Write-Step "Setting GitHub repo secrets and variables on $Repo"
 Set-Secret -Name AZURE_CLIENT_ID          -Value $appId
 Set-Secret -Name AZURE_TENANT_ID          -Value $tenantId
 Set-Secret -Name AZURE_SUBSCRIPTION_ID    -Value $SubscriptionId
+# Object id (not appId) of the deploy SP, passed to Bicep as ciPrincipalId so the
+# nightly backup workflow's RBAC on the snapshot store can be granted (ADR-0007).
+Set-Secret -Name AZURE_CI_PRINCIPAL_ID    -Value $spObjectId
 Set-Secret -Name LIFELEDGER_PASSWORD_HASH -Value $PasswordHash
 Set-Secret -Name LIFELEDGER_SESSION_KEY   -Value $SessionKey
 

@@ -35,12 +35,19 @@ param sessionKey string
 @description('IANA timezone selecting the embedded zoneinfo so "today" is the local calendar day (ADR-0005).')
 param timeZone string = 'Europe/Madrid'
 
+@description('Object id of the CI/deploy service principal (OIDC). Granted data-plane access to the snapshot store so the nightly backup workflow can copy and prune (ADR-0007).')
+param ciPrincipalId string
+
 // --- derived names -----------------------------------------------------------
 
 var suffix = uniqueString(resourceGroup().id, baseName)
 var acrName = 'acr${suffix}'
 var storageName = 'st${suffix}'
 var backupContainerName = 'ledgerbackup'
+// Second, private container holding the retained point-in-time snapshot history
+// (daily/ + monthly/). Disjoint from ledgerbackup; the app never touches it — only
+// the nightly backup workflow's CI principal does (ADR-0007).
+var snapshotsContainerName = 'ledgersnapshots'
 var envName = '${baseName}-env'
 var appName = baseName
 var logName = '${baseName}-logs'
@@ -57,7 +64,12 @@ var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
 // Storage Blob Data Contributor built-in role, granted to the app's managed
 // identity so it can read/write the backup blob with no stored account key.
+// Also granted to the CI principal on ledgersnapshots (copy dest + prune delete).
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+// Storage Blob Data Reader built-in role, granted to the CI principal on
+// ledgerbackup so the nightly workflow can read the copy source (ADR-0007).
+var blobReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 
 // --- user-assigned identity --------------------------------------------------
 
@@ -114,6 +126,19 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 resource backupContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
   name: backupContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// The retained snapshot history (ADR-0007): daily/YYYY-MM-DD.db kept for a rolling
+// 7-day window plus monthly/YYYY-MM.db kept forever, written by the nightly backup
+// workflow. Blob versioning and soft delete are deliberately left off — the prune
+// is an explicit delete-batch in the workflow, not a lifecycle-management policy
+// (#33). Private; the app UAMI has no grant here, only the CI principal does.
+resource snapshotsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: snapshotsContainerName
   properties: {
     publicAccess: 'None'
   }
@@ -303,15 +328,44 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 
 // Grant the user-assigned identity read/write on the backup container, so the
 // store's Blob sink authenticates with the identity instead of an account key.
-// Scoped to the storage account (which now holds only this backup container),
-// parallel to the AcrPull assignment above. On the same UAMI as AcrPull so the
+// Scoped to the ledgerbackup container only — not the whole account — so the app
+// cannot see or touch the retained snapshot history in ledgersnapshots it would
+// roll back to (ADR-0007, least privilege). On the same UAMI as AcrPull so the
 // app carries a single identity (ADR-0006).
 resource blobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, uami.id, blobContributorRoleId)
-  scope: storage
+  name: guid(backupContainer.id, uami.id, blobContributorRoleId)
+  scope: backupContainer
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
     principalId: uami.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// --- CI principal grants for the nightly backup workflow (ADR-0007) ----------
+
+// The backup workflow copies ledgerbackup/expenses.db (source) into
+// ledgersnapshots/{daily,monthly}/ (dest) and prunes old dailies, all under
+// `az ... --auth-mode login` as the CI/deploy OIDC principal. It gets exactly the
+// two data-plane grants that needs and no more: Reader on the source container,
+// Contributor on the dest container. Reader carries generateUserDelegationKey, so
+// the CLI can mint the user-delegation SAS the copy source needs (verified #34).
+resource ciBackupReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(backupContainer.id, ciPrincipalId, blobReaderRoleId)
+  scope: backupContainer
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobReaderRoleId)
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ciSnapshotsContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(snapshotsContainer.id, ciPrincipalId, blobContributorRoleId)
+  scope: snapshotsContainer
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobContributorRoleId)
+    principalId: ciPrincipalId
     principalType: 'ServicePrincipal'
   }
 }

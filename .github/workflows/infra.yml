@@ -38,6 +38,9 @@ jobs:
       CONTAINER_IMAGE: ${{ github.event.inputs.containerImage }}
       PASSWORD_HASH: ${{ secrets.LIFELEDGER_PASSWORD_HASH }}
       SESSION_KEY: ${{ secrets.LIFELEDGER_SESSION_KEY }}
+      # Object id of the CI/deploy OIDC service principal, granted data-plane
+      # access to the snapshot store for the nightly backup workflow (ADR-0007).
+      CI_PRINCIPAL_ID: ${{ secrets.AZURE_CI_PRINCIPAL_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,4 +64,5 @@ jobs:
               location="$LOCATION" \
               containerImage="$CONTAINER_IMAGE" \
               passwordHash="$PASSWORD_HASH" \
-              sessionKey="$SESSION_KEY"
+              sessionKey="$SESSION_KEY" \
+              ciPrincipalId="$CI_PRINCIPAL_ID"

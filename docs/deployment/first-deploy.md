@@ -105,7 +105,9 @@ out). Pin a value in `.env` to force it to a specific known value instead.
 ### 5. Repository secrets and variables
 
 **Secrets** (sensitive): `AZURE_CLIENT_ID` (the app's `appId`), `AZURE_TENANT_ID`,
-`AZURE_SUBSCRIPTION_ID`, `LIFELEDGER_PASSWORD_HASH`, `LIFELEDGER_SESSION_KEY`.
+`AZURE_SUBSCRIPTION_ID`, `AZURE_CI_PRINCIPAL_ID` (the deploy SP's **object id**,
+distinct from its `appId` — passed to Bicep as `ciPrincipalId` for the retained
+backup RBAC, ADR-0007), `LIFELEDGER_PASSWORD_HASH`, `LIFELEDGER_SESSION_KEY`.
 
 **Variables** (non-sensitive config): `AZURE_RESOURCE_GROUP`, `AZURE_LOCATION`.
 
