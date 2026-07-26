@@ -1,0 +1,132 @@
+# Nightly retained backup of the SQLite database (ADR-0007).
+#
+# Every night this takes a retained, point-in-time snapshot of the live
+# `ledgerbackup/expenses.db` into `ledgersnapshots/daily/<UTC-date>.db`, but only
+# after an integrity gate proves the source is a healthy database — a blind copy
+# would replicate corruption into every daily. This is the tracer-bullet slice
+# (#41): triggers, permissions, login, discover, download, gate, daily copy. The
+# gate-fail alarm branch, the 7-day prune, and the month-end catch-up land in
+# follow-up tickets.
+#
+# OIDC subject: this job must NOT set a job-level `environment:`. A scheduled or
+# dispatched run on main emits subject `...:ref:refs/heads/main`, which the
+# existing `life-ledger-main` federated credential matches. An `environment:`
+# would swap the subject to `...:environment:<name>` and break the exchange
+# silently (no second credential is provisioned — #34).
+#
+# Timing: cron is UTC-only. `0 1 * * *` is 2-3 a.m. Madrid; the ±1h DST slop and
+# GitHub's own scheduler drift are accepted (ADR-0007). Do not "fix" them.
+#
+# House rules (AGENTS.md): never inline `${{ }}` injected values into `run:`
+# scripts — route them through `env:` and reference shell variables. Discovered
+# runtime values (storage account, snapshot date) are published via $GITHUB_ENV
+# so later steps read them as plain environment variables, same discipline.
+
+name: backup
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 01:00 UTC daily; UTC date == Madrid date at this hour.
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC federated login to Azure (reuses life-ledger-main, #34).
+  contents: read
+  issues: write # For the gate-fail alarm issue (follow-up ticket).
+
+jobs:
+  backup:
+    name: backup
+    runs-on: ubuntu-latest # sqlite3 + az preinstalled (#34).
+    # NO job-level `environment:` — it would change the OIDC subject and break the
+    # existing federated credential (#34). Do not add one.
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      BACKUP_CONTAINER: ledgerbackup # Copy source; the live working blob.
+      SNAPSHOTS_CONTAINER: ledgersnapshots # Copy dest; the retained history.
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Discover storage account
+        run: |
+          set -euo pipefail
+          name=$(az storage account list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv)
+          if [ -z "$name" ]; then
+            echo "::error::No storage account found in resource group '$RESOURCE_GROUP'. Run the infra workflow first."
+            exit 1
+          fi
+          echo "Storage account: $name"
+          echo "STORAGE_ACCOUNT=$name" >> "$GITHUB_ENV"
+          # The run's UTC date names the snapshot; compute once so gate and copy agree.
+          echo "SNAPSHOT_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Download the live database
+        run: |
+          set -euo pipefail
+          az storage blob download \
+            --account-name "$STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --container-name "$BACKUP_CONTAINER" \
+            --name expenses.db \
+            --file expenses.db \
+            --no-progress
+
+      # Integrity gate (#35). The copy happens only if all three checks pass. A
+      # corrupt database is a *successful* query that returns error text, so the
+      # exit code is worthless here — every check compares the output STRING, with
+      # stderr merged (`2>&1`) so an unopenable file also fails the comparison.
+      - name: Integrity gate
+        run: |
+          set -euo pipefail
+          DB=expenses.db
+
+          # 1. sqlite3 can open the file and read its schema (catches a truncated
+          #    download or a non-DB file). The query must touch the database — a
+          #    constant like `SELECT 1;` is prepared without reading page 1, so it
+          #    returns cleanly even on garbage; `sqlite_master` forces the header
+          #    and schema to be read. A bad file writes to stderr and leaves $open
+          #    non-numeric, which fails the check.
+          open=$(sqlite3 "$DB" "SELECT count(*) FROM sqlite_master;" 2>&1) || true
+          if ! printf '%s' "$open" | grep -Eq '^[0-9]+$'; then
+            echo "::error::Cannot open $DB as a SQLite database: $open"
+            exit 1
+          fi
+
+          # 2. Full integrity_check must return exactly 'ok' (not quick_check).
+          integrity=$(sqlite3 "$DB" "PRAGMA integrity_check;" 2>&1) || true
+          if [ "$integrity" != "ok" ]; then
+            echo "::error::integrity_check did not return 'ok': $integrity"
+            exit 1
+          fi
+
+          # 3. goose schema version must be an integer >= 1. Log it — the restore
+          #    runbook keys the migration-is-the-bug path off this value.
+          version=$(sqlite3 "$DB" "SELECT max(version_id) FROM goose_db_version;" 2>&1) || true
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+$' || [ "$version" -lt 1 ]; then
+            echo "::error::goose_db_version check failed (expected integer >= 1): $version"
+            exit 1
+          fi
+
+          echo "Integrity gate passed. goose schema version = $version"
+          echo "::notice::Backup integrity gate passed; goose schema version=$version"
+
+      # Gate passed → server-side copy the live blob to today's dated daily
+      # snapshot. `--requires-sync true` makes the step's success mean the copy
+      # actually finished (no async pending state — #34). `--auth-mode login`
+      # authorizes with the OIDC token; omitting it would silently fall back to an
+      # account key.
+      - name: Daily snapshot copy
+        run: |
+          set -euo pipefail
+          echo "Copying $BACKUP_CONTAINER/expenses.db -> $SNAPSHOTS_CONTAINER/daily/$SNAPSHOT_DATE.db"
+          az storage blob copy start \
+            --account-name "$STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --requires-sync true \
+            --source-container "$BACKUP_CONTAINER" --source-blob expenses.db \
+            --destination-container "$SNAPSHOTS_CONTAINER" --destination-blob "daily/$SNAPSHOT_DATE.db"
