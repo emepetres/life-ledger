@@ -3,10 +3,10 @@
 # Every night this takes a retained, point-in-time snapshot of the live
 # `ledgerbackup/expenses.db` into `ledgersnapshots/daily/<UTC-date>.db`, but only
 # after an integrity gate proves the source is a healthy database — a blind copy
-# would replicate corruption into every daily. This is the tracer-bullet slice
-# (#41): triggers, permissions, login, discover, download, gate, daily copy. The
-# gate-fail alarm branch, the 7-day prune, and the month-end catch-up land in
-# follow-up tickets.
+# would replicate corruption into every daily. Built up across the tracer slice
+# (#41: triggers, permissions, login, discover, download, gate, daily copy) and
+# the 7-day daily prune (#43). The gate-fail alarm branch and the month-end
+# catch-up land in follow-up tickets.
 #
 # OIDC subject: this job must NOT set a job-level `environment:`. A scheduled or
 # dispatched run on main emits subject `...:ref:refs/heads/main`, which the
@@ -130,3 +130,34 @@ jobs:
             --requires-sync true \
             --source-container "$BACKUP_CONTAINER" --source-blob expenses.db \
             --destination-container "$SNAPSHOTS_CONTAINER" --destination-blob "daily/$SNAPSHOT_DATE.db"
+
+      # Prune dailies older than 7 days (#43). This step runs only after the copy,
+      # which runs only after the gate — a failed gate exits earlier and freezes
+      # the prune along with the copy (steps stop on first failure). So a bad
+      # source never both skips its own snapshot AND shrinks the window.
+      #
+      # The pattern is anchored to the `daily/` prefix. `delete-batch`'s --pattern
+      # is fnmatch and `*` DOES cross `/`, so an unanchored pattern (e.g. a bare
+      # `*` or `daily*`) would reach `monthly/` and `pre-restore/`. Anchoring to
+      # the literal `daily/` prefix is what makes "never touch month-ends" a
+      # property the command cannot violate: no month-end name begins with
+      # `daily/`, so none can match. Month-ends are kept forever (ADR-0007).
+      #
+      # The window is best-effort "7–9 days", not exactly 7 (ADR-0007): the cutoff
+      # keys off --if-unmodified-since, delete-batch swallows per-blob errors and
+      # exits 0, and the prune only runs on nights the workflow runs and the gate
+      # passes. That looseness is accepted. Do NOT add --dryrun to sanity-check the
+      # selection: it IGNORES --if-* preconditions, so it would preview a superset
+      # (every daily) — the opposite of safe. Use `az storage blob list` to verify.
+      - name: Prune dailies older than 7 days
+        run: |
+          set -euo pipefail
+          # UTC cutoff, 7 days before now. az wants YYYY-MM-DDThh:mmZ.
+          cutoff=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%MZ)
+          echo "Pruning $SNAPSHOTS_CONTAINER/daily/* not modified since $cutoff"
+          az storage blob delete-batch \
+            --account-name "$STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --source "$SNAPSHOTS_CONTAINER" \
+            --pattern 'daily/*' \
+            --if-unmodified-since "$cutoff"
