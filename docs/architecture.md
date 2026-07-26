@@ -179,12 +179,14 @@ flowchart LR
 - **Nightly retained backup** (`backup.yml`, ADR-0007): a third workflow on a
   `0 1 * * *` UTC cron (plus dispatch). It integrity-checks the live
   `ledgerbackup/expenses.db`, and only if that passes, server-side-copies it into
-  the **`ledgersnapshots`** container as `daily/YYYY-MM-DD.db` (plus
-  `monthly/YYYY-MM.db` on month boundaries), then prunes dailies older than 7 days
-  — month-ends are kept forever. It authenticates with the *same* OIDC federated
-  identity as CD; the app's own Blob grant is scoped down to `ledgerbackup` so a
-  buggy app build cannot reach the history. A failed integrity check skips the
-  copy, freezes the prune, and raises a sticky `backup-alarm` issue. Recovery is
+  the **`ledgersnapshots`** container as `daily/YYYY-MM-DD.db` (plus, within the
+  first 7 UTC days of a month, a `monthly/YYYY-MM.db` for the previous month if it
+  is still missing — so a missed 1st self-heals that week), then prunes dailies
+  older than 7 days — month-ends are kept forever. It authenticates with the
+  *same* OIDC federated identity as CD; the app's own Blob grant is scoped down
+  to `ledgerbackup` so a buggy app build cannot reach the history. A failed
+  integrity check skips the copy, freezes the prune, and raises a sticky
+  `backup-alarm` issue. Recovery is
   operator-driven via the **[restore runbook](deployment/restore-runbook.md)**.
 - **Auth to Azure**: OIDC federated identity — no long-lived secret in GitHub.
 - **Secrets**: the app's `LIFELEDGER_PASSWORD_HASH` and `LIFELEDGER_SESSION_KEY`

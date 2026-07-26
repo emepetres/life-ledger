@@ -5,8 +5,9 @@
 # after an integrity gate proves the source is a healthy database — a blind copy
 # would replicate corruption into every daily. Built up across the tracer slice
 # (#41: triggers, permissions, login, discover, download, gate, daily copy), the
-# 7-day daily prune (#43), and the gate-failure freeze + sticky backup-alarm
-# issue (#42). The month-end catch-up lands in a follow-up ticket.
+# 7-day daily prune (#43), the gate-failure freeze + sticky backup-alarm issue
+# (#42), and the month-end catch-up backfill (#44): within the first 7 UTC days
+# of a month a passing run writes/backfills monthly/<prev-month>.db if missing.
 #
 # Failure path (#42): the gate still exits non-zero on a bad source — that is
 # what freezes both the copy and the prune (both are success()-gated, so a red
@@ -165,6 +166,62 @@ jobs:
             --requires-sync true \
             --source-container "$BACKUP_CONTAINER" --source-blob expenses.db \
             --destination-container "$SNAPSHOTS_CONTAINER" --destination-blob "daily/$SNAPSHOT_DATE.db"
+
+      # Month-end catch-up backfill (#35 constraint 7, #44). ADR-0007: the
+      # month-end IS the 1st-of-next-month run, written to BOTH daily/ and
+      # monthly/ and labelled by the month it represents (monthly/2026-06.db for
+      # the run on 2026-07-01), not the day it ran. This one step is both that
+      # month-end write and its catch-up: on any gate-passing run within the
+      # first 7 UTC days of a month, if monthly/<prev-month>.db is still missing,
+      # write it from the same gated source. So a failed 1st self-heals on the
+      # next passing run that week, and once the file exists this is a no-op.
+      #
+      # Why "missing AND day <= 7" is the whole rule:
+      #   - It never overwrites an existing month-end (ADR-0007: kept forever),
+      #     so a healthy 1st writes it once and days 2-7 do nothing.
+      #   - Bounding to day <= 7 stops a month whose 1st-of-next-month run was
+      #     never backfilled (e.g. the repo was quiet) from being resurrected
+      #     from a much-later, unrepresentative source mid-month.
+      # Both dates are derived from SNAPSHOT_DATE — the same instant the daily is
+      # named for — so the daily and the month-end can never disagree on the run
+      # date. %-d yields the unpadded day (1..31) for a clean numeric compare.
+      #
+      # Same gated source and same --requires-sync/--auth-mode discipline as the
+      # daily copy above; it too is frozen by a red gate (steps stop on first
+      # failure) and is an infra-only fault if it fails (never a gate fault).
+      - name: Month-end catch-up backfill
+        run: |
+          set -euo pipefail
+          dom=$(date -u -d "$SNAPSHOT_DATE" +%-d)
+          if [ "$dom" -gt 7 ]; then
+            echo "UTC day-of-month is $dom (> 7); no month-end backfill this run."
+            exit 0
+          fi
+
+          # <prev-month> = the month before SNAPSHOT_DATE's month, YYYY-MM. First
+          # of this month minus one day lands on the last day of the previous
+          # month, robust across year boundaries (2026-01-xx -> 2025-12).
+          prev_month=$(date -u -d "$(date -u -d "$SNAPSHOT_DATE" +%Y-%m-01) -1 day" +%Y-%m)
+          dest="monthly/$prev_month.db"
+
+          exists=$(az storage blob exists \
+            --account-name "$STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --container-name "$SNAPSHOTS_CONTAINER" \
+            --name "$dest" \
+            --query exists -o tsv)
+          if [ "$exists" = "true" ]; then
+            echo "$SNAPSHOTS_CONTAINER/$dest already exists; keeping it (never overwrite a month-end)."
+            exit 0
+          fi
+
+          echo "Backfilling $BACKUP_CONTAINER/expenses.db -> $SNAPSHOTS_CONTAINER/$dest (day $dom, missing)"
+          az storage blob copy start \
+            --account-name "$STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --requires-sync true \
+            --source-container "$BACKUP_CONTAINER" --source-blob expenses.db \
+            --destination-container "$SNAPSHOTS_CONTAINER" --destination-blob "$dest"
 
       # Prune dailies older than 7 days (#43). This step runs only after the copy,
       # which runs only after the gate — a failed gate exits earlier and freezes
