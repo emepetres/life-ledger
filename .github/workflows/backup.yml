@@ -4,9 +4,16 @@
 # `ledgerbackup/expenses.db` into `ledgersnapshots/daily/<UTC-date>.db`, but only
 # after an integrity gate proves the source is a healthy database — a blind copy
 # would replicate corruption into every daily. Built up across the tracer slice
-# (#41: triggers, permissions, login, discover, download, gate, daily copy) and
-# the 7-day daily prune (#43). The gate-fail alarm branch and the month-end
-# catch-up land in follow-up tickets.
+# (#41: triggers, permissions, login, discover, download, gate, daily copy), the
+# 7-day daily prune (#43), and the gate-failure freeze + sticky backup-alarm
+# issue (#42). The month-end catch-up lands in a follow-up ticket.
+#
+# Failure path (#42): the gate still exits non-zero on a bad source — that is
+# what freezes both the copy and the prune (both are success()-gated, so a red
+# gate skips them). Before it exits it publishes GATE_RESULT=fail and the failure
+# detail to $GITHUB_ENV; the alarm step reads that to drive a single sticky
+# `backup-alarm` issue. There is no un-freeze switch — the next passing run
+# resumes on its own.
 #
 # OIDC subject: this job must NOT set a job-level `environment:`. A scheduled or
 # dispatched run on main emits subject `...:ref:refs/heads/main`, which the
@@ -32,7 +39,7 @@ on:
 permissions:
   id-token: write # OIDC federated login to Azure (reuses life-ledger-main, #34).
   contents: read
-  issues: write # For the gate-fail alarm issue (follow-up ticket).
+  issues: write # For the sticky backup-alarm issue on a gate failure (#42).
 
 jobs:
   backup:
@@ -44,6 +51,13 @@ jobs:
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       BACKUP_CONTAINER: ledgerbackup # Copy source; the live working blob.
       SNAPSHOTS_CONTAINER: ledgersnapshots # Copy dest; the retained history.
+      # Shared by the alarm + recovered steps. There is no actions/checkout in this
+      # job, so GH_REPO tells gh which repo to act on; GH_TOKEN authorizes it. Both
+      # routed via env per the AGENTS.md rule (no ${{ }} inlined into run:). Hoisted
+      # to the job so the two gh steps don't each re-declare them.
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ALARM_LABEL: backup-alarm # The sticky backup-gate alarm issue's label (#42).
     steps:
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -80,38 +94,59 @@ jobs:
       # corrupt database is a *successful* query that returns error text, so the
       # exit code is worthless here — every check compares the output STRING, with
       # stderr merged (`2>&1`) so an unopenable file also fails the comparison.
+      #
+      # On failure this step still exits non-zero (that is what freezes the copy
+      # and the prune below), but first it hands the failure detail to the alarm
+      # step through $GITHUB_ENV: GATE_RESULT, which of the three checks tripped,
+      # and the integrity_check output. On success it publishes GATE_RESULT=pass
+      # so a later copy/prune failure — an infra fault, not a gate fault — cannot
+      # misfire the backup-alarm issue.
       - name: Integrity gate
         run: |
           set -euo pipefail
           DB=expenses.db
 
-          # 1. sqlite3 can open the file and read its schema (catches a truncated
-          #    download or a non-DB file). The query must touch the database — a
-          #    constant like `SELECT 1;` is prepared without reading page 1, so it
-          #    returns cleanly even on garbage; `sqlite_master` forces the header
-          #    and schema to be read. A bad file writes to stderr and leaves $open
-          #    non-numeric, which fails the check.
+          # Run all three probes up front so the alarm can always report the
+          # integrity_check output, even when openability already tripped. Each is
+          # a *successful* sqlite3 call returning text (`|| true` guards the rare
+          # real non-zero); the checks below judge the STRINGS, not the exit codes.
+          #
+          #   open      — sqlite3 opens the file and reads its schema. The query
+          #               must touch the database: a constant like `SELECT 1;` is
+          #               prepared without reading page 1 and returns cleanly even
+          #               on garbage, so `sqlite_master` forces header+schema read.
+          #               A bad file writes to stderr and leaves $open non-numeric.
+          #   integrity — full PRAGMA integrity_check (not quick_check).
+          #   version   — goose schema version; must be an integer >= 1.
           open=$(sqlite3 "$DB" "SELECT count(*) FROM sqlite_master;" 2>&1) || true
-          if ! printf '%s' "$open" | grep -Eq '^[0-9]+$'; then
-            echo "::error::Cannot open $DB as a SQLite database: $open"
-            exit 1
-          fi
-
-          # 2. Full integrity_check must return exactly 'ok' (not quick_check).
           integrity=$(sqlite3 "$DB" "PRAGMA integrity_check;" 2>&1) || true
-          if [ "$integrity" != "ok" ]; then
-            echo "::error::integrity_check did not return 'ok': $integrity"
-            exit 1
-          fi
-
-          # 3. goose schema version must be an integer >= 1. Log it — the restore
-          #    runbook keys the migration-is-the-bug path off this value.
           version=$(sqlite3 "$DB" "SELECT max(version_id) FROM goose_db_version;" 2>&1) || true
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]+$' || [ "$version" -lt 1 ]; then
-            echo "::error::goose_db_version check failed (expected integer >= 1): $version"
+
+          # First failing check wins; a non-empty $failed_check means gate FAIL.
+          failed_check=""
+          if ! printf '%s' "$open" | grep -Eq '^[0-9]+$'; then
+            failed_check="openability (SELECT count(*) FROM sqlite_master)"
+          elif [ "$integrity" != "ok" ]; then
+            failed_check="integrity_check (PRAGMA integrity_check != 'ok')"
+          elif ! printf '%s' "$version" | grep -Eq '^[0-9]+$' || [ "$version" -lt 1 ]; then
+            failed_check="goose_db_version (max(version_id) not an integer >= 1)"
+          fi
+
+          if [ -n "$failed_check" ]; then
+            echo "::error::Integrity gate FAILED at: $failed_check"
+            # Hand the detail to the alarm step (fires on this step's failure).
+            # integrity_check output can be multiline → heredoc-delimited value.
+            {
+              echo "GATE_RESULT=fail"
+              echo "GATE_FAILED_CHECK=$failed_check"
+              echo "GATE_INTEGRITY_OUTPUT<<GATE_INTEGRITY_EOF"
+              printf '%s\n' "$integrity"
+              echo "GATE_INTEGRITY_EOF"
+            } >> "$GITHUB_ENV"
             exit 1
           fi
 
+          echo "GATE_RESULT=pass" >> "$GITHUB_ENV"
           echo "Integrity gate passed. goose schema version = $version"
           echo "::notice::Backup integrity gate passed; goose schema version=$version"
 
@@ -161,3 +196,96 @@ jobs:
             --source "$SNAPSHOTS_CONTAINER" \
             --pattern 'daily/*' \
             --if-unmodified-since "$cutoff"
+
+      # The alarm (#35 constraint 8, #42). Fires ONLY when the integrity gate
+      # itself failed — `failure()` catches the red gate step, and the
+      # GATE_RESULT guard narrows it to a gate fault so a copy/prune (infra)
+      # failure stays a red-run-only signal and never touches this issue.
+      #
+      # One sticky issue carries every consecutive bad night. Each night posts its
+      # dated detail as a COMMENT; the first bad night also opens the issue (with a
+      # standing description, not that night's detail). So N consecutive bad nights
+      # leave 1 issue + N comments — one dated entry per night — never N issues.
+      # The red run is the second, independent channel (GitHub emails it). The
+      # issue is NEVER auto-closed on a green run: a human closes it once the cause
+      # is understood (that close is the restore runbook's terminal "all-clear");
+      # a recovering night only comments (below).
+      - name: Raise backup alarm (gate failed)
+        if: failure() && env.GATE_RESULT == 'fail'
+        env:
+          ALARM_TITLE: '🚨 Nightly backup gate failed'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Create the label if missing; `|| true` swallows the "already exists"
+          # error so re-runs stay idempotent.
+          gh label create "$ALARM_LABEL" \
+            --color B60205 \
+            --description "Nightly retained-backup integrity gate failed (ADR-0007)" \
+            2>/dev/null || true
+
+          # This night's detail — always posted as a COMMENT (see the count rule
+          # above). Assembled with printf/echo, not a YAML-embedded heredoc, so the
+          # multiline integrity output and the code fences survive intact.
+          {
+            echo "**$SNAPSHOT_DATE** — the nightly backup integrity gate **FAILED**."
+            echo
+            echo "- Failed check: \`$GATE_FAILED_CHECK\`"
+            echo "- \`PRAGMA integrity_check\` output:"
+            echo
+            echo '```'
+            printf '%s\n' "$GATE_INTEGRITY_OUTPUT"
+            echo '```'
+            echo
+            echo "The daily copy and the 7-day prune were **skipped** for this run"
+            echo "(one gate failure freezes both). No un-freeze switch — the next"
+            echo "passing run resumes on its own. Restore guidance: docs/deployment/restore-runbook.md."
+            echo
+            echo "Workflow run: $RUN_URL"
+          } > alarm-comment.md
+
+          # Reuse the open sticky issue if one exists; otherwise open it. `gh issue
+          # create` prints the new issue's URL — its trailing path segment is the
+          # number we then comment on, so create and reuse converge on one path.
+          existing=$(gh issue list --label "$ALARM_LABEL" --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            echo "No open $ALARM_LABEL issue — opening the sticky alarm."
+            url=$(gh issue create --title "$ALARM_TITLE" --label "$ALARM_LABEL" \
+              --body "Sticky alarm for the nightly retained-backup integrity gate (ADR-0007). Each failing night adds a dated comment below (the check that tripped and the \`integrity_check\` output); a recovering night adds a one-line \`recovered\` comment. This issue is **not** auto-closed — close it once the cause is understood; that close is the restore runbook's all-clear. Restore guidance: \`docs/deployment/restore-runbook.md\`.")
+            existing=${url##*/}
+          fi
+          echo "Recording this night on $ALARM_LABEL issue #$existing."
+          gh issue comment "$existing" --body-file alarm-comment.md
+
+      # A recovering night (gate passed and the copy/prune ran) posts a one-line
+      # "recovered" comment on the still-open alarm issue but does NOT close it —
+      # closing stays a human decision (ADR-0007 / restore runbook). It posts once
+      # per failure→recovery transition: if the newest comment is already a
+      # recovered marker, a prior green night wrote it, so stay silent rather than
+      # pile duplicate "recovered"s onto a lingering issue (a check that cries wolf
+      # gets ignored — #35). Best-effort throughout: a gh hiccup here must never
+      # turn an otherwise-good backup run red.
+      - name: Backup recovered — comment on open alarm
+        if: success() && env.GATE_RESULT == 'pass'
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label "$ALARM_LABEL" --state open \
+            --limit 1 --json number --jq '.[0].number // empty') || true
+          if [ -z "${existing:-}" ]; then
+            echo "No open $ALARM_LABEL issue; nothing to recover."
+            exit 0
+          fi
+          last=$(gh issue view "$existing" --json comments --jq '.comments[-1].body // ""') || true
+          case "$last" in
+            "✅ "*)
+              echo "Issue #$existing already marked recovered by an earlier green night; not repeating."
+              ;;
+            *)
+              echo "Open $ALARM_LABEL issue #$existing — posting 'recovered' (leaving it open)."
+              gh issue comment "$existing" \
+                --body "✅ **$SNAPSHOT_DATE** — gate passed and the daily snapshot was written. Recovered. Leaving this issue open; close it once the cause is understood (ADR-0007)." \
+                || echo "::warning::Could not post the recovered comment; backup itself succeeded."
+              ;;
+          esac
