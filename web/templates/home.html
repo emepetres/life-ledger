@@ -89,7 +89,12 @@
     </div>
     <div class="acts">
       <a class="ghost" href="/edit/{{ .ID }}">edit</a>
-      <form method="post" action="/delete/{{ .ID }}">
+      <form
+        method="post"
+        action="/delete/{{ .ID }}"
+        hx-boost="true"
+        hx-confirm="Delete this expense? This can't be undone."
+      >
         <button class="ghost danger" type="submit">delete</button>
       </form>
     </div>

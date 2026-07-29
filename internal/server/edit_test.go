@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -213,6 +214,42 @@ func TestListWiresPerRowEditAndDelete(t *testing.T) {
 	}
 	if strings.Contains(body, "disabled>edit") || strings.Contains(body, "disabled>delete") {
 		t.Errorf("edit/delete controls should no longer be disabled placeholders; got:\n%s", body)
+	}
+}
+
+// AC: the delete control carries a client-side confirmation gate (htmx's
+// hx-confirm) naming the action, so a click can't fire the delete request
+// without the user confirming first.
+func TestDeleteControlHasConfirmation(t *testing.T) {
+	ts, _, seed, _ := newEditFixture(t, "10 lunch @work")
+
+	_, body := get(t, ts, "/")
+	id := strconv.FormatInt(seed.ID, 10)
+
+	deleteFormStart := strings.Index(body, `action="/delete/`+id+`"`)
+	if deleteFormStart == -1 {
+		t.Fatalf("delete form for id %s not found; got:\n%s", id, body)
+	}
+	formEnd := strings.Index(body[deleteFormStart:], "</form>")
+	if formEnd == -1 {
+		t.Fatalf("unterminated delete form; got:\n%s", body)
+	}
+	deleteForm := body[deleteFormStart : deleteFormStart+formEnd]
+
+	// hx-confirm only gates a request htmx itself issues; on a plain form that
+	// requires hx-boost (or hx-post), so without it hx-confirm would be inert
+	// and the browser would submit the delete unconditionally.
+	if !strings.Contains(deleteForm, `hx-boost="true"`) {
+		t.Errorf("delete form should be hx-boosted, or its hx-confirm never fires; got:\n%s", deleteForm)
+	}
+
+	confirmMatch := regexp.MustCompile(`hx-confirm="([^"]*)"`).FindStringSubmatch(deleteForm)
+	if confirmMatch == nil {
+		t.Fatalf("delete form should carry hx-confirm; got:\n%s", deleteForm)
+	}
+	confirmMsg := strings.ToLower(confirmMatch[1])
+	if !strings.Contains(confirmMsg, "delete") || !strings.Contains(confirmMsg, "expense") {
+		t.Errorf("hx-confirm message should unambiguously name deleting an expense; got %q", confirmMatch[1])
 	}
 }
 
