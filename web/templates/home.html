@@ -88,7 +88,7 @@
       {{ if .Split }}<span class="badge split">½</span>{{ end }}
     </div>
     <div class="acts">
-      <a class="ghost" href="/edit/{{ .ID }}">edit</a>
+      {{ if .Editable }}<a class="ghost" href="/edit/{{ .ID }}">edit</a>{{ end }}
       <form
         method="post"
         action="/delete/{{ .ID }}"

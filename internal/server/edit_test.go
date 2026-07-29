@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/emepetres/life-ledger/internal/expense"
+	"github.com/emepetres/life-ledger/internal/server"
 	"github.com/emepetres/life-ledger/internal/store"
 )
 
@@ -76,10 +77,11 @@ func postForm(t *testing.T, ts *httptest.Server, path string, form url.Values) (
 	return resp, string(body)
 }
 
-// AC: per-row Edit loads the original raw_text back into the quick-add box, with
-// the live preview + save gate active, and edit mode is signalled (a "Save
-// changes" control and a cancel affordance).
-func TestEditFormLoadsRawTextAndShowsEditMode(t *testing.T) {
+// AC: per-row Edit loads the canonical entry line (not the verbatim raw_text)
+// back into the quick-add box — its date rendered absolute as "DD/MM" so a later
+// re-parse can't shift it (ADR-0008) — with the live preview + save gate active,
+// and edit mode signalled (a "Save changes" control and a cancel affordance).
+func TestEditFormLoadsCanonicalLineAndShowsEditMode(t *testing.T) {
 	ts, _, seed, _ := newEditFixture(t, "12.50 lunch @work")
 
 	resp, body := get(t, ts, "/edit/"+strconv.FormatInt(seed.ID, 10))
@@ -87,9 +89,10 @@ func TestEditFormLoadsRawTextAndShowsEditMode(t *testing.T) {
 		t.Fatalf("GET /edit/%d status = %d, want 200", seed.ID, resp.StatusCode)
 	}
 
-	// The original raw_text is loaded back into the quick-add box.
-	if !strings.Contains(body, `value="12.50 lunch @work"`) {
-		t.Errorf("edit form should load raw_text into the box; got:\n%s", body)
+	// The canonical entry line is loaded into the box: the date is now the
+	// absolute "21/7" (testToday), where the verbatim line named none.
+	if !strings.Contains(body, `value="12.50 lunch 21/7 @work"`) {
+		t.Errorf("edit form should load the canonical entry line into the box; got:\n%s", body)
 	}
 	// The same live-preview path is active (chips reflect the parsed line).
 	for _, want := range []string{"€12.50", "lunch", "@work"} {
@@ -259,5 +262,96 @@ func TestEditFormUnknownID404(t *testing.T) {
 	resp, _ := get(t, ts, "/edit/999")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /edit/999 status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// The bug this fixes (issue #47): editing an expense whose entry line carried a
+// relative date, days after it was entered, must not shift the stored date. The
+// edit box now holds the canonical line with an absolute date, so re-parsing on
+// save keeps the date put no matter how much later the edit happens (ADR-0008).
+func TestEditDoesNotShiftDateAfterTimePasses(t *testing.T) {
+	// Enter "12 lunch -3" on 2026-07-21, so it resolves to 2026-07-18.
+	clk := &editClock{t: time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)}
+	path := filepath.Join(t.TempDir(), "data", "expenses.db")
+	st, err := store.Open(path, store.WithClock(clk.now))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	parsed := expense.Parse("12 lunch -3", clk.now())
+	seed := &expense.Expense{
+		Date:        parsed.Date,
+		Amount:      parsed.Amount,
+		Description: parsed.Description,
+		Split:       parsed.Split,
+		RawText:     "12 lunch -3",
+	}
+	if err := st.Create(context.Background(), seed); err != nil {
+		t.Fatalf("seeding expense: %v", err)
+	}
+
+	// The server shares the clock, so it can be advanced to "edit day".
+	h, err := server.New(st, server.WithClock(clk.now))
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+
+	clk.t = time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC) // edit five days later
+	id := strconv.FormatInt(seed.ID, 10)
+
+	// The edit box holds the canonical line: the date is the absolute "18/7" the
+	// entry originally resolved to, not the stale "-3".
+	_, body := get(t, ts, "/edit/"+id)
+	if !strings.Contains(body, `value="12 lunch 18/7"`) {
+		t.Fatalf("edit box should hold the canonical line with the original absolute date; got:\n%s", body)
+	}
+
+	// Change only the amount and save the canonical line back.
+	resp, _ := postForm(t, ts, "/edit/"+id, url.Values{"raw": {"15 lunch 18/7"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /edit status = %d, want 200 after redirect", resp.StatusCode)
+	}
+
+	got, err := st.Get(context.Background(), seed.ID)
+	if err != nil {
+		t.Fatalf("Get after edit: %v", err)
+	}
+	want := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
+	if !got.Date.Equal(want) {
+		t.Errorf("edit shifted the date: got %s, want %s", got.Date.Format("2006-01-02"), want.Format("2006-01-02"))
+	}
+	if got.Amount != 1500 {
+		t.Errorf("edit did not update the amount: got %d, want 1500", got.Amount)
+	}
+}
+
+// An expense older than a year can't be edited (ADR-0008): the list omits its
+// Edit link and both edit endpoints refuse it with a bare 403, while its Delete
+// control stays. 404 remains reserved for an unknown id.
+func TestEditGuardsExpensesOlderThanAYear(t *testing.T) {
+	// Seeded (against testToday, 2026-07-21) with an absolute 2020 date, so it is
+	// well over a year old as of the server's frozen now.
+	ts, _, seed, _ := newEditFixture(t, "10 old 1/1/2020")
+	id := strconv.FormatInt(seed.ID, 10)
+
+	// The list shows the row but offers no Edit link for it (Delete stays).
+	_, body := get(t, ts, "/")
+	if strings.Contains(body, `/edit/`+id) {
+		t.Errorf("list should omit the Edit link for a too-old expense; got:\n%s", body)
+	}
+	if !strings.Contains(body, `/delete/`+id) {
+		t.Errorf("a too-old expense should still be deletable; got:\n%s", body)
+	}
+
+	// The edit endpoints refuse it directly, with a bare 403.
+	if resp, _ := get(t, ts, "/edit/"+id); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("GET /edit for a too-old expense status = %d, want 403", resp.StatusCode)
+	}
+	resp, _ := postForm(t, ts, "/edit/"+id, url.Values{"raw": {"12 old 1/1/2020"}})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("POST /edit for a too-old expense status = %d, want 403", resp.StatusCode)
 	}
 }

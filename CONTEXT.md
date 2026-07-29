@@ -19,3 +19,7 @@ _Avoid_: Shared, halved, half
 **Account** (tag):
 An optional free-text tag naming which account or card an expense was paid from (e.g. personal, work, common, home). Blank when omitted, in which case "personal" is assumed at display time; may be filled in later when the expense is reviewed. A pure label in this slice — it carries no split or halving behavior.
 _Avoid_: Wallet, source, card
+
+**Canonical entry line**:
+An expense rendered back into entry syntax from its stored fields — the inverse of parsing. Its date is always an absolute `DD/MM`, never a relative `-N`, so it re-parses to the same expense regardless of when. This is what fills the box when editing (never the original keystrokes), which keeps an edit from silently shifting the date.
+_Avoid_: Raw text, verbatim line

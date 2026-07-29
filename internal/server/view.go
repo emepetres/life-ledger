@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/emepetres/life-ledger/internal/expense"
 )
@@ -137,6 +138,10 @@ type rowView struct {
 	Account        string // "@work", or "@personal" when defaulted
 	AccountDefault bool
 	Split          bool
+	// Editable gates the row's Edit link: false for an expense too old to edit
+	// (its date a year old or older), so the list only offers edits that can't
+	// shift the date (ADR-0008).
+	Editable bool
 }
 
 const (
@@ -150,7 +155,7 @@ const (
 // preserving that order (the list arrives ordered by date then id, both
 // descending). Rows within a day keep their most-recently-added-first order and
 // each group carries the day's summed total.
-func groupByDay(expenses []expense.Expense) []dayGroup {
+func groupByDay(expenses []expense.Expense, now time.Time) []dayGroup {
 	var groups []dayGroup
 	var curKey string
 	var curTotal int
@@ -170,6 +175,7 @@ func groupByDay(expenses []expense.Expense) []dayGroup {
 			Account:        accountLabel(e.Account),
 			AccountDefault: e.Account == nil,
 			Split:          e.Split,
+			Editable:       expense.Editable(e.Date, now),
 		})
 		curTotal += e.Amount
 		g.Total = formatEuro(curTotal)

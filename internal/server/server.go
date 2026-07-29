@@ -250,7 +250,7 @@ func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, 
 		FormAction: formAction,
 		Editing:    editing,
 		Preview:    buildPreview(raw, parsed, false, editing),
-		Groups:     groupByDay(expenses),
+		Groups:     groupByDay(expenses, s.now()),
 	})
 }
 
@@ -303,7 +303,14 @@ func (s *Server) handleEditForm(w http.ResponseWriter, r *http.Request) {
 	if respondStoreErr(w, r, "loading expense for edit", id, err) {
 		return
 	}
-	s.renderForm(w, r, http.StatusOK, e.RawText, editAction(id), true)
+	if !expense.Editable(e.Date, s.now()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	// Edit the canonical entry line rendered from the stored fields, not the
+	// verbatim raw_text: its date is absolute, so re-parsing on save can't shift
+	// it (ADR-0008).
+	s.renderForm(w, r, http.StatusOK, e.EntryLine(), editAction(id), true)
 }
 
 // handleEditSave re-parses the edited line, re-validates the save gate on the
@@ -321,6 +328,18 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// Guard on the stored date, never the submitted line: an expense too old to
+	// edit (ADR-0008) is refused even on a direct POST that skipped the list's
+	// hidden Edit link.
+	existing, err := s.store.Get(r.Context(), id)
+	if respondStoreErr(w, r, "loading expense for edit", id, err) {
+		return
+	}
+	if !expense.Editable(existing.Date, s.now()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	raw := r.PostFormValue("raw")
 
 	parsed := expense.Parse(raw, s.now())
