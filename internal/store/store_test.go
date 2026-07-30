@@ -106,7 +106,7 @@ func TestBackupOnWriteRestoresAtFreshPath(t *testing.T) {
 	}
 	descs := []string{"coffee", "parking", "lunch"}
 	for _, d := range descs {
-		if err := first.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: d, RawText: "1 " + d}); err != nil {
+		if err := first.Create(ctx, expense.NewExpense(baseTime, 100, d, nil, false, "1 "+d)); err != nil {
 			t.Fatalf("Create %s: %v", d, err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestBackupOnWriteRestoresAtFreshPath(t *testing.T) {
 	}
 
 	// Schema is current after restore: a write on the restored DB succeeds.
-	if err := second.Create(ctx, &expense.Expense{Date: baseTime, Amount: 200, Description: "post-restore", RawText: "2 post-restore"}); err != nil {
+	if err := second.Create(ctx, expense.NewExpense(baseTime, 200, "post-restore", nil, false, "2 post-restore")); err != nil {
 		t.Fatalf("Create on restored store: %v", err)
 	}
 }
@@ -146,7 +146,7 @@ func TestExistingLocalFileReusedNotRestored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open first store: %v", err)
 	}
-	if err := first.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: "keep", RawText: "1 keep"}); err != nil {
+	if err := first.Create(ctx, expense.NewExpense(baseTime, 100, "keep", nil, false, "1 keep")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	_ = first.Close()
@@ -189,7 +189,7 @@ func TestSaveFailureFailsWrite(t *testing.T) {
 	s := openTemp(t, store.WithBackup(sink))
 	ctx := context.Background()
 
-	err := s.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: "x", RawText: "1 x"})
+	err := s.Create(ctx, expense.NewExpense(baseTime, 100, "x", nil, false, "1 x"))
 	if err == nil {
 		t.Fatal("Create returned nil despite Save failure")
 	}
@@ -241,7 +241,7 @@ func TestBootLogsOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open seed: %v", err)
 	}
-	if err := seed.Create(ctx, &expense.Expense{Date: baseTime, Amount: 100, Description: "seed", RawText: "1 seed"}); err != nil {
+	if err := seed.Create(ctx, expense.NewExpense(baseTime, 100, "seed", nil, false, "1 seed")); err != nil {
 		t.Fatalf("Create seed: %v", err)
 	}
 	_ = seed.Close()
@@ -303,14 +303,10 @@ func TestCreateAssignsIdentityAndRoundTrips(t *testing.T) {
 	s := openTemp(t, store.WithClock(clk.now))
 	ctx := context.Background()
 
-	e := &expense.Expense{
-		Date:        time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
-		Amount:      1250,
-		Description: "parking",
-		Split:       true,
-		Account:     ptr("work"),
-		RawText:     "9.95 parking @work *",
-	}
+	e := expense.NewExpense(
+		time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
+		1250, "parking", ptr("work"), true, "9.95 parking @work *",
+	)
 	if err := s.Create(ctx, e); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -354,14 +350,8 @@ func TestOmittedAccountPersistsAsNull(t *testing.T) {
 	s := openTemp(t)
 	ctx := context.Background()
 
-	e := &expense.Expense{
-		Date:        baseTime,
-		Amount:      4999,
-		Description: "groceries",
-		Split:       true, // full amount must still be stored
-		Account:     nil,  // omitted
-		RawText:     "49.99 groceries *",
-	}
+	// full amount must still be stored despite split; account omitted (nil)
+	e := expense.NewExpense(baseTime, 4999, "groceries", nil, true, "49.99 groceries *")
 	if err := s.Create(ctx, e); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -391,7 +381,7 @@ func TestListNewestFirst(t *testing.T) {
 
 	// Insertion order deliberately not sorted; ids increase with insertion.
 	mk := func(date time.Time, desc string) {
-		if err := s.Create(ctx, &expense.Expense{Date: date, Amount: 100, Description: desc, RawText: "1 " + desc}); err != nil {
+		if err := s.Create(ctx, expense.NewExpense(date, 100, desc, nil, false, "1 "+desc)); err != nil {
 			t.Fatalf("Create %s: %v", desc, err)
 		}
 	}
@@ -422,13 +412,7 @@ func TestUpdateRefreshesUpdatedAtKeepsIdentity(t *testing.T) {
 	s := openTemp(t, store.WithClock(clk.now))
 	ctx := context.Background()
 
-	e := &expense.Expense{
-		Date:        baseTime,
-		Amount:      1000,
-		Description: "coffee",
-		Account:     ptr("personal"),
-		RawText:     "10 coffee @personal",
-	}
+	e := expense.NewExpense(baseTime, 1000, "coffee", ptr("personal"), false, "10 coffee @personal")
 	if err := s.Create(ctx, e); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -471,7 +455,7 @@ func TestDeleteRemoves(t *testing.T) {
 	s := openTemp(t)
 	ctx := context.Background()
 
-	e := &expense.Expense{Date: baseTime, Amount: 500, Description: "snack", RawText: "5 snack"}
+	e := expense.NewExpense(baseTime, 500, "snack", nil, false, "5 snack")
 	if err := s.Create(ctx, e); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -499,7 +483,9 @@ func TestUnknownIDReturnsNotFound(t *testing.T) {
 	if _, err := s.Get(ctx, 999); err != store.ErrNotFound {
 		t.Errorf("Get unknown err = %v, want ErrNotFound", err)
 	}
-	if err := s.Update(ctx, &expense.Expense{ID: 999, Date: baseTime, Amount: 1, Description: "x", RawText: "x"}); err != store.ErrNotFound {
+	unknown := expense.NewExpense(baseTime, 1, "x", nil, false, "x")
+	unknown.ID = 999
+	if err := s.Update(ctx, unknown); err != store.ErrNotFound {
 		t.Errorf("Update unknown err = %v, want ErrNotFound", err)
 	}
 	if err := s.Delete(ctx, 999); err != store.ErrNotFound {

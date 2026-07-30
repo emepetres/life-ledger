@@ -14,6 +14,8 @@
   --accent: #2f6f4f;
   --accent-soft: #e6f2ec;
   --amount: #14532d;
+  --credit: #047857;
+  --credit-soft: #d1fae5;
   --split: #b45309;
   --split-soft: #fdf0dd;
   --acct: #3730a3;
@@ -94,6 +96,8 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   margin-top: 10px; min-height: 26px;
 }
 .chip.amount { background: var(--accent-soft); color: var(--amount); font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Income preview: a green credit chip so a '+' line reads as money in (ADR-0009). */
+.chip.amount.credit { background: var(--credit-soft); color: var(--credit); }
 .chip.date { background: #eef2f7; color: #334155; }
 .chip.desc { background: transparent; color: var(--ink); padding-left: 0; font-weight: 600; }
 .chip.muted { background: none; color: var(--muted); }
@@ -127,6 +131,9 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   font-family: var(--mono); font-weight: 700; color: var(--amount);
   text-align: right; font-variant-numeric: tabular-nums;
 }
+/* A standalone income renders as a green credit row — the "−€X.XX" amount in a
+   distinct credit green so money in reads apart from an expense (ADR-0009). */
+.row.credit .amt { color: var(--credit); }
 .desc-cell { min-width: 0; }
 .desc-cell .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .meta-m { display: none; gap: 6px; margin-top: 4px; align-items: center; } /* mobile-only */
@@ -138,6 +145,56 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .row .acts form { display: contents; }
 
 .empty { color: var(--muted); padding: 16px; text-align: center; }
+
+/* ---- payback / net cost (ADR-0009) ---- */
+/* The out-of-band payback link chip in the quick-add box, plus the standalone
+   "income" tag on a credit row. */
+.chip.link { background: var(--split-soft); color: var(--split); font-weight: 600; }
+.payback-banner {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 10px; flex-wrap: wrap;
+}
+.payback-banner .cancel { margin-left: auto; }
+
+/* Net-first amount: the derived net cost is the headline, the full paid amount
+   sits beneath it, struck through — storage stays the faithful transcript. */
+.amt.stack { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+.amt.stack .netbig { font-weight: 700; }
+/* Over-repaid (Σ paybacks > paid): the negative net renders green, like a credit. */
+.amt.stack .netbig.credit { color: var(--credit); }
+.amt.stack .paid { font-size: 11.5px; font-weight: 500; color: var(--muted); text-decoration: line-through; }
+
+/* The "−€X.XX from N paybacks" disclosure lives inside the description cell: its
+   summary is the clickable line, the drawer its expanded breakdown. Only
+   phrasing content sits in the summary (valid <details> nesting); the row's edit
+   / delete / + payback actions stay in .acts, outside the toggle. */
+.pb-disclosure { margin-top: 3px; }
+.pb-disclosure > summary {
+  list-style: none; cursor: pointer;
+  font-size: 12px; color: var(--muted);
+}
+.pb-disclosure > summary::-webkit-details-marker { display: none; }
+.pb-disclosure > summary::after { content: " ▾"; }
+.pb-disclosure[open] > summary::after { content: " ▴"; }
+.pbsum .in { color: var(--credit); font-weight: 600; }
+
+/* The expanded breakdown: one indented credit line per payback. */
+.pb-drawer { padding: 4px 0 2px 14px; }
+.pb { display: flex; gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; color: #334155; }
+.pb .pa {
+  font-family: var(--mono); color: var(--credit); font-weight: 700;
+  min-width: 74px; text-align: right; font-variant-numeric: tabular-nums;
+}
+.pb .pb-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb .pb-date { color: var(--muted); }
+.acts .addpb { font-size: 11.5px; }
+
+@media (max-width: 640px) {
+  /* On the narrow row grid (auto 1fr auto), the net headline aligns left like
+     the plain amount does. */
+  .amt.stack { align-items: flex-start; }
+  .pb-drawer { padding-left: 12px; }
+}
 
 /* ---- narrow: rail collapses, rows restack (no literal cards) ---- */
 @media (max-width: 640px) {

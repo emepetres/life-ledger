@@ -27,8 +27,25 @@
           class="entry{{ if .Editing }} editing{{ end }}"
           aria-label="Quick add"
         >
-          <h2>{{ if .Editing }}Edit expense{{ else }}Quick add{{ end }}</h2>
+          <h2>
+            {{ if .Editing }}Edit {{ if .Income }}income{{ else }}expense{{ end
+            }}{{ else if .Payback }}Quick add — payback{{ else }}Quick add{{ end
+            }}
+          </h2>
           <form method="post" action="{{ .FormAction }}" autocomplete="off">
+            {{ if .Payback }}
+            <input
+              type="hidden"
+              name="linked_expense_id"
+              value="{{ .LinkedExpenseID }}"
+            />
+            <div class="payback-banner">
+              <span class="chip link"
+                >↩ payback → {{ .LinkedExpenseDesc }}</span
+              >
+              <a class="ghost cancel" href="/">Cancel</a>
+            </div>
+            {{ end }}
             <input
               class="qa-input"
               type="text"
@@ -73,10 +90,47 @@
     <span>{{ .Label }}</span><span class="tot">{{ .Total }}</span>
   </div>
   {{ range .Rows }}
-  <div class="row">
+  {{ if .IsCredit }}
+  <div class="row credit">
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
+      <div class="meta-m">{{ template "account" . }}</div>
+    </div>
+    <div class="cell-acct">{{ template "account" . }}</div>
+    <div class="cell-split"></div>
+    {{ template "income-acts" . }}
+  </div>
+  {{ else }}
+  <div class="row{{ if .HasPaybacks }} haspb{{ end }}">
+    {{ if .HasPaybacks }}
+    <div class="amt stack">
+      <span class="netbig{{ if .OverRepaid }} credit{{ end }}">{{ .Net }}</span>
+      <span class="paid">{{ .Paid }}</span>
+    </div>
+    {{ else }}
+    <div class="amt">{{ .Amount }}</div>
+    {{ end }}
+    <div class="desc-cell">
+      <div class="d">{{ .Description }}</div>
+      {{ if .HasPaybacks }}
+      <details class="pb-disclosure">
+        <summary class="pbsum">
+          <span class="in">{{ .PaybackSum }}</span> from {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}
+        </summary>
+        <div class="pb-drawer">
+          {{ range .Paybacks }}
+          <div class="pb">
+            <span class="pa">{{ .Amount }}</span>
+            <span class="pb-desc">↩ {{ .Description }}</span>
+            {{ template "account" . }}
+            <span class="pb-date">· {{ .DateLabel }}</span>
+            {{ template "income-acts" . }}
+          </div>
+          {{ end }}
+        </div>
+      </details>
+      {{ end }}
       <div class="meta-m">
         {{ template "account" . }} {{ if .Split }}<span class="chip split"
           >½ split</span
@@ -87,21 +141,39 @@
     <div class="cell-split">
       {{ if .Split }}<span class="badge split">½</span>{{ end }}
     </div>
-    <div class="acts">
-      {{ if .Editable }}<a class="ghost" href="/edit/{{ .ID }}">edit</a>{{ end }}
-      <form
-        method="post"
-        action="/delete/{{ .ID }}"
-        hx-boost="true"
-        hx-confirm="Delete this expense? This can't be undone."
-      >
-        <button class="ghost danger" type="submit">delete</button>
-      </form>
-    </div>
+    {{ template "expense-acts" . }}
   </div>
   {{ end }}
+  {{ end }}
 </div>
-{{ end }} {{ end }} {{ end }} {{ define "account" }} {{ if .AccountDefault
+{{ end }} {{ end }} {{ end }} {{ define "expense-acts" }}
+<div class="acts">
+  <a class="ghost addpb" href="/payback/{{ .ID }}">+ payback</a>
+  {{ if .Editable }}<a class="ghost" href="/edit/expense/{{ .ID }}">edit</a>{{
+  end }}
+  <form
+    method="post"
+    action="/delete/expense/{{ .ID }}"
+    hx-boost="true"
+    hx-confirm="{{ if .HasPaybacks }}Delete this expense and its {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}? This can't be undone.{{ else }}Delete this expense? This can't be undone.{{ end }}"
+  >
+    <button class="ghost danger" type="submit">delete</button>
+  </form>
+</div>
+{{ end }} {{ define "income-acts" }}
+<div class="acts">
+  {{ if .Editable }}<a class="ghost" href="/edit/income/{{ .ID }}">edit</a>{{ end
+  }}
+  <form
+    method="post"
+    action="/delete/income/{{ .ID }}"
+    hx-boost="true"
+    hx-confirm="Delete this income? This can't be undone."
+  >
+    <button class="ghost danger" type="submit">delete</button>
+  </form>
+</div>
+{{ end }} {{ define "account" }} {{ if .AccountDefault
 }}<span class="chip acct default">@personal</span>{{ else }}<span
   class="chip acct"
   >{{ .Account }}</span
@@ -109,8 +181,10 @@
 <div class="preview chips" aria-label="Preview">
   {{ if .Empty }}
   <span class="chip muted">live preview…</span>
-  {{ else }} {{ if .HasAmount }}<span class="chip amount">{{ .Amount }}</span>{{
-  end }}
+  {{ else }} {{ if .HasAmount }}<span
+    class="chip amount{{ if .IsCredit }} credit{{ end }}"
+    >{{ .Amount }}</span
+  >{{ end }}
   <span class="chip date">{{ .DateLabel }}</span>
   {{ if .Description }}<span class="chip desc">{{ .Description }}</span>{{ end
   }} {{ template "account" . }} {{ if .Split }}<span class="chip split"

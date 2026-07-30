@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,12 +25,16 @@ type homeView struct {
 	// In edit mode it is pre-filled with the edited row's original raw_text.
 	Raw string
 	// FormAction is where the quick-add form posts: "/add" normally, or
-	// "/edit/{id}" while editing that row in place.
+	// "/edit/{kind}/{id}" while editing that row in place.
 	FormAction string
-	// Editing is true when the quick-add box is editing an existing expense
+	// Editing is true when the quick-add box is editing an existing record
 	// rather than adding a new one. It highlights the form, relabels the save
 	// control, and reveals the cancel affordance.
 	Editing bool
+	// Income is true when the record being edited is an income rather than an
+	// expense, so the edit-mode heading names the right kind (ADR-0009). It is
+	// meaningful only when Editing is true.
+	Income bool
 	// Preview is the live-preview fragment rendered inline for the current Raw,
 	// so a no-JS load (and a save-gate rejection) shows the same preview htmx
 	// would swap in. It is non-interactive here — the save control stays enabled
@@ -37,6 +42,17 @@ type homeView struct {
 	Preview previewView
 	// Groups is the list, newest day first, each with its rows and day total.
 	Groups []dayGroup
+	// Payback is true when the box was opened via a row's "+ payback" action
+	// (GET /payback/{expenseID}): it reveals the non-editable payback chip and
+	// carries the hidden LinkedExpenseID so the income saved from this box is
+	// linked to its parent out-of-band, never through the entry text (ADR-0009).
+	Payback bool
+	// LinkedExpenseID is the parent expense a payback links to, rendered as a
+	// hidden form field; meaningful only when Payback is true.
+	LinkedExpenseID int64
+	// LinkedExpenseDesc names the parent in the payback chip ("↩ payback → <desc>")
+	// so the user sees which expense this credit nets down.
+	LinkedExpenseDesc string
 }
 
 // previewView is the view model for the live-preview fragment: the resolved
@@ -46,9 +62,13 @@ type homeView struct {
 type previewView struct {
 	// Empty is true for a blank entry, shown as an unobtrusive placeholder.
 	Empty bool
-	// HasAmount gates the amount chip; Amount is "€X.XX" when present.
+	// HasAmount gates the amount chip; Amount is "€X.XX" for an expense and the
+	// green credit "−€X.XX" for an income (IsCredit).
 	HasAmount bool
 	Amount    string
+	// IsCredit marks a '+' income line so the amount chip renders green as a
+	// credit that subtracts (ADR-0009); an income never shows a split badge.
+	IsCredit bool
 	// DateLabel is the resolved date as a real date, e.g. "Fri 17 Jul" — never
 	// a "-N" offset or a raw token.
 	DateLabel string
@@ -78,23 +98,30 @@ type previewView struct {
 // submit still reaches the server-side save gate. editing relabels the save
 // control and reveals the cancel affordance, carried through so live swaps during
 // an edit keep the edit-mode chrome.
-func buildPreview(raw string, p expense.ParsedExpense, interactive, editing bool) previewView {
+func buildPreview(raw string, p expense.ParsedEntry, interactive, editing bool) previewView {
 	if strings.TrimSpace(raw) == "" {
 		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
 	}
 	account, isDefault := accountDisplay(p.Account)
 	v := previewView{
 		HasAmount:      p.HasAmount,
+		IsCredit:       p.IsIncome,
 		DateLabel:      p.Date.Format(dayLabelLayout),
 		Description:    p.Description,
 		Account:        account,
 		AccountDefault: isDefault,
-		Split:          p.Split,
-		Errors:         errorMessages(p.Errors),
-		Editing:        editing,
+		// An income is never split, so suppress the badge even if the line carried a
+		// stray '*' (which the save gate rejects anyway, ADR-0009).
+		Split:   p.Split && !p.IsIncome,
+		Errors:  errorMessages(p.Errors),
+		Editing: editing,
 	}
 	if p.HasAmount {
-		v.Amount = formatEuro(p.Amount)
+		if p.IsIncome {
+			v.Amount = formatCredit(p.Amount)
+		} else {
+			v.Amount = formatEuro(p.Amount)
+		}
 	}
 	if interactive {
 		v.DisableSave = !p.OK()
@@ -126,21 +153,72 @@ type dayGroup struct {
 	Rows []rowView
 }
 
-// rowView is one expense as shown in the list. Account is always non-blank —
-// an account-less expense surfaces as "@personal" (AccountDefault true) rather
-// than blank, so the default account is visible and consistent everywhere.
+// rowView is one row as shown in the list — an expense or a standalone income,
+// discriminated by IsCredit (the html/template idiom, since it has no type
+// switch, ADR-0009). Account is always non-blank — an account-less row surfaces
+// as "@personal" (AccountDefault true) rather than blank, so the default account
+// is visible and consistent everywhere.
 type rowView struct {
-	// ID is the stored expense's identity, threaded through so the row's edit and
-	// delete controls can target its id-scoped endpoints.
-	ID             int64
-	Amount         string // "€X.XX"
+	// ID is the stored record's identity, threaded through so the row's edit and
+	// delete controls can target its kind-qualified endpoints — /edit/income and
+	// /delete/income for a credit row, the expense twins otherwise (ADR-0009).
+	ID int64
+	// IsCredit marks a standalone income: it renders as a green "−€X.XX" credit
+	// row and, unlike an expense, carries no split marker and does not move the
+	// day total. It still exposes edit/delete controls (to its income endpoints).
+	IsCredit       bool
+	Amount         string // "€X.XX" for an expense; "−€X.XX" for a credit
 	Description    string
 	Account        string // "@work", or "@personal" when defaulted
 	AccountDefault bool
 	Split          bool
-	// Editable gates the row's Edit link: false for an expense too old to edit
+	// Editable gates the row's Edit link: false for a record too old to edit
 	// (its date a year old or older), so the list only offers edits that can't
-	// shift the date (ADR-0008).
+	// shift the date (ADR-0008). Set for both expense and standalone-income rows.
+	Editable bool
+
+	// Net-cost fields (ADR-0009), set only on a fronted expense — one with at
+	// least one linked payback (HasPaybacks). Net cost is derived at render time
+	// as paid − Σ paybacks and is never stored; the plain Amount above stays the
+	// full paid figure. An expense with no paybacks leaves all of these zero and
+	// renders exactly as it does today.
+	HasPaybacks bool
+	// Net is the derived net-cost headline, signed: "€40.00" when positive, or a
+	// green credit "−€10.00" when over-repaid (OverRepaid).
+	Net string
+	// Paid is the full paid amount ("€60.00"), shown struck-through beneath the
+	// net headline — the faithful transcript the stored amount still holds.
+	Paid string
+	// OverRepaid is true when Σ paybacks exceeds paid, so net is negative and
+	// renders green (ADR-0009 is ungated — over-repayment is allowed).
+	OverRepaid bool
+	// PaybackSum is the total credited by the paybacks, as a green "−€X.XX", shown
+	// in the "−€X.XX from N paybacks ▾" disclosure summary.
+	PaybackSum string
+	// PaybackCount is len(Paybacks), carried out so the template can pluralise the
+	// summary without a range.
+	PaybackCount int
+	// Paybacks is the nested breakdown revealed by the disclosure, each a credit
+	// with its own description, account, and date (ADR-0009).
+	Paybacks []paybackView
+}
+
+// paybackView is one linked payback in a fronted expense's disclosure: a credit
+// carrying its own amount, description, account, and date — each independent of
+// the parent expense (ADR-0009). Account is always non-blank, surfacing as
+// "@personal" (AccountDefault true) when the payback named none, exactly like a
+// row.
+type paybackView struct {
+	// ID is the payback income's identity, so its edit/delete controls in the
+	// disclosure target the /edit/income and /delete/income endpoints (ADR-0009).
+	ID             int64
+	Amount         string // the credit magnitude as "−€X.XX"
+	Description    string
+	Account        string // "@bbva", or "@personal" when defaulted
+	AccountDefault bool
+	DateLabel      string // the payback's own date, e.g. "Thu 30 Jul"
+	// Editable gates the payback's Edit link by the same one-year cutoff as any
+	// other record (ADR-0008), on the payback's own date.
 	Editable bool
 }
 
@@ -151,24 +229,48 @@ const (
 	dayKeyLayout = "2006-01-02"
 )
 
-// groupByDay turns the store's newest-first expense list into day groups,
-// preserving that order (the list arrives ordered by date then id, both
-// descending). Rows within a day keep their most-recently-added-first order and
-// each group carries the day's summed total.
-func groupByDay(expenses []expense.Expense, now time.Time) []dayGroup {
-	var groups []dayGroup
-	var curKey string
-	var curTotal int
+// feedItem is one entry in the interleaved list feed before day grouping: its
+// row view plus the sort keys and the day-total contribution. cost is the net
+// cost this item adds to its day's total — an expense's amount, and zero for a
+// standalone income, which renders green but must not move the day total
+// (ADR-0009).
+type feedItem struct {
+	date      time.Time
+	createdAt time.Time
+	cost      int
+	row       rowView
+}
 
-	for _, e := range expenses {
-		key := e.Date.Format(dayKeyLayout)
-		if len(groups) == 0 || key != curKey {
-			groups = append(groups, dayGroup{Label: e.Date.Format(dayLabelLayout)})
-			curKey = key
-			curTotal = 0
+// groupByDay merges the store's newest-first expense and income lists into day
+// groups, interleaving standalone incomes among the expenses by their own date
+// (ADR-0009). Each list arrives ordered by date then id descending, but id
+// sequences are per-table and not comparable across the two, so the merged feed
+// is ordered by date then created_at descending — the one recency key both kinds
+// share — keeping a day's rows most-recently-added-first across expenses and
+// incomes alike. Each group's total is the sum of its expenses' net cost only —
+// a standalone income renders as a green credit row but does not move it, so the
+// total keeps meaning "what the day cost me". Linked paybacks (a non-nil
+// LinkedExpenseID) are not standalone rows: they are bucketed onto their parent
+// expense, where the derived net cost (paid − Σ paybacks) nets the parent's
+// contribution to its day total.
+func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.Time) []dayGroup {
+	// Two bulk reads, one in-memory stitch (ADR-0009): bucket the incomes by their
+	// linked_expense_id, so each expense can attach its paybacks; a nil link is a
+	// standalone credit that stays a feed row of its own.
+	paybacks := make(map[int64][]expense.Income)
+	var standalone []expense.Income
+	for _, i := range incomes {
+		if i.LinkedExpenseID != nil {
+			id := *i.LinkedExpenseID
+			paybacks[id] = append(paybacks[id], i)
+		} else {
+			standalone = append(standalone, i)
 		}
-		g := &groups[len(groups)-1]
-		g.Rows = append(g.Rows, rowView{
+	}
+
+	feed := make([]feedItem, 0, len(expenses)+len(standalone))
+	for _, e := range expenses {
+		row := rowView{
 			ID:             e.ID,
 			Amount:         formatEuro(e.Amount),
 			Description:    e.Description,
@@ -176,9 +278,86 @@ func groupByDay(expenses []expense.Expense, now time.Time) []dayGroup {
 			AccountDefault: e.Account == nil,
 			Split:          e.Split,
 			Editable:       expense.Editable(e.Date, now),
+		}
+		// Net cost is derived here, never stored (ADR-0001 untouched): the row's
+		// contribution to its day total is the full paid amount, less its paybacks.
+		cost := e.Amount
+		if pbs := paybacks[e.ID]; len(pbs) > 0 {
+			sum := 0
+			views := make([]paybackView, 0, len(pbs))
+			for _, p := range pbs {
+				sum += p.Amount
+				views = append(views, paybackView{
+					ID:             p.ID,
+					Amount:         formatCredit(p.Amount),
+					Description:    p.Description,
+					Account:        accountLabel(p.Account),
+					AccountDefault: p.Account == nil,
+					DateLabel:      p.Date.Format(dayLabelLayout),
+					Editable:       expense.Editable(p.Date, now),
+				})
+			}
+			net := e.Amount - sum
+			cost = net
+			row.HasPaybacks = true
+			row.Net = formatNet(net)
+			row.Paid = formatEuro(e.Amount)
+			row.OverRepaid = net < 0
+			row.PaybackSum = formatCredit(sum)
+			row.PaybackCount = len(pbs)
+			row.Paybacks = views
+		}
+		feed = append(feed, feedItem{
+			date:      e.Date,
+			createdAt: e.CreatedAt,
+			cost:      cost,
+			row:       row,
 		})
-		curTotal += e.Amount
-		g.Total = formatEuro(curTotal)
+	}
+	for _, i := range standalone {
+		feed = append(feed, feedItem{
+			date:      i.Date,
+			createdAt: i.CreatedAt,
+			cost:      0, // a standalone income does not move the day total
+			row: rowView{
+				ID:             i.ID,
+				IsCredit:       true,
+				Amount:         formatCredit(i.Amount),
+				Description:    i.Description,
+				Account:        accountLabel(i.Account),
+				AccountDefault: i.Account == nil,
+				Editable:       expense.Editable(i.Date, now),
+			},
+		})
+	}
+
+	// Newest first: date descending, then created_at descending within a day so
+	// the two kinds interleave by recency. A stable sort preserves each source
+	// list's incoming order for items sharing an exact timestamp.
+	sort.SliceStable(feed, func(a, b int) bool {
+		if !feed[a].date.Equal(feed[b].date) {
+			return feed[a].date.After(feed[b].date)
+		}
+		return feed[a].createdAt.After(feed[b].createdAt)
+	})
+
+	var groups []dayGroup
+	var curKey string
+	var curTotal int
+	for _, it := range feed {
+		key := it.date.Format(dayKeyLayout)
+		if len(groups) == 0 || key != curKey {
+			groups = append(groups, dayGroup{Label: it.date.Format(dayLabelLayout)})
+			curKey = key
+			curTotal = 0
+		}
+		g := &groups[len(groups)-1]
+		g.Rows = append(g.Rows, it.row)
+		curTotal += it.cost
+		// formatNet, not formatEuro: an over-repaid expense can net a whole day's
+		// cost below zero (ADR-0009 is ungated), which must render as a signed
+		// green credit rather than a malformed euro string.
+		g.Total = formatNet(curTotal)
 	}
 	return groups
 }
@@ -186,6 +365,24 @@ func groupByDay(expenses []expense.Expense, now time.Time) []dayGroup {
 // formatEuro renders integer minor units (cents) as "€X.XX".
 func formatEuro(minorUnits int) string {
 	return fmt.Sprintf("€%d.%02d", minorUnits/100, minorUnits%100)
+}
+
+// formatNet renders a derived net cost, which may be negative when an expense is
+// over-repaid (ADR-0009). A non-negative net is a plain "€X.XX"; a negative net
+// is a green credit "−€X.XX" of its magnitude, reusing formatCredit so the minus
+// glyph and formatting can't drift from the credit chip.
+func formatNet(net int) string {
+	if net < 0 {
+		return formatCredit(-net)
+	}
+	return formatEuro(net)
+}
+
+// formatCredit renders an income's positive magnitude as a credit "−€X.XX",
+// prefixing the U+2212 MINUS SIGN to signal that it subtracts (ADR-0009). The
+// glyph is the true minus sign, not a hyphen, matching the credit chip.
+func formatCredit(minorUnits int) string {
+	return "−" + formatEuro(minorUnits)
 }
 
 // accountLabel is the "@tag" display for a row's nullable stored account: the

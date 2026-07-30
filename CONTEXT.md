@@ -23,3 +23,15 @@ _Avoid_: Wallet, source, card
 **Canonical entry line**:
 An expense rendered back into entry syntax from its stored fields — the inverse of parsing. Its date is always an absolute `DD/MM`, never a relative `-N`, so it re-parses to the same expense regardless of when. This is what fills the box when editing (never the original keystrokes), which keeps an edit from silently shifting the date.
 _Avoid_: Raw text, verbatim line
+
+**Income**:
+A stored record that is structurally an Expense but negative — it subtracts from total expenses. Reuses the expense entry/edit path (the free-text parser, the record shape, the canonical entry line, the edit/delete flow); the one thing it lacks is the `*` split marker (an income is never split). Entered with a leading `+` on the amount (`+30 …`). Lives in its own `income` table.
+_Avoid_: Credit, refund, deposit
+
+**Payback**:
+An Income linked to a specific Expense (`linked_expense_id`), recording money received back against a fronted group ticket. Carries its own date and own account, both independent of the parent — you can front from one account and be repaid into another, on another day. A standalone income has no such link; a payback is the linked case.
+_Avoid_: Repayment, settlement, reimbursement
+
+**Net cost** (derived):
+An expense's full Amount minus the sum of its linked paybacks — never stored, computed at display time. May be negative when over-repaid (rendered green). The list surfaces net cost as the headline figure while the stored Amount stays the full amount paid.
+_Avoid_: Balance, remainder, owed

@@ -45,14 +45,7 @@ func newEditFixture(t *testing.T, raw string) (*httptest.Server, *store.Store, e
 		a := parsed.Account
 		account = &a
 	}
-	seed := &expense.Expense{
-		Date:        parsed.Date,
-		Amount:      parsed.Amount,
-		Description: parsed.Description,
-		Split:       parsed.Split,
-		Account:     account,
-		RawText:     raw,
-	}
+	seed := expense.NewExpense(parsed.Date, parsed.Amount, parsed.Description, account, parsed.Split, raw)
 	if err := st.Create(context.Background(), seed); err != nil {
 		t.Fatalf("seeding expense: %v", err)
 	}
@@ -84,7 +77,7 @@ func postForm(t *testing.T, ts *httptest.Server, path string, form url.Values) (
 func TestEditFormLoadsCanonicalLineAndShowsEditMode(t *testing.T) {
 	ts, _, seed, _ := newEditFixture(t, "12.50 lunch @work")
 
-	resp, body := get(t, ts, "/edit/"+strconv.FormatInt(seed.ID, 10))
+	resp, body := get(t, ts, "/edit/expense/"+strconv.FormatInt(seed.ID, 10))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /edit/%d status = %d, want 200", seed.ID, resp.StatusCode)
 	}
@@ -109,8 +102,8 @@ func TestEditFormLoadsCanonicalLineAndShowsEditMode(t *testing.T) {
 		t.Errorf("edit mode should offer a cancel affordance back to /; got:\n%s", body)
 	}
 	// The form targets the edit endpoint for this id.
-	if !strings.Contains(body, `action="/edit/`+strconv.FormatInt(seed.ID, 10)+`"`) {
-		t.Errorf("edit form should post to /edit/%d; got:\n%s", seed.ID, body)
+	if !strings.Contains(body, `action="/edit/expense/`+strconv.FormatInt(seed.ID, 10)+`"`) {
+		t.Errorf("edit form should post to /edit/expense/%d; got:\n%s", seed.ID, body)
 	}
 }
 
@@ -122,7 +115,7 @@ func TestEditSaveKeepsIdentityRefreshesUpdatedAt(t *testing.T) {
 	// Advance the store clock so a refreshed updated_at is distinguishable.
 	clk.t = seed.UpdatedAt.Add(48 * time.Hour)
 
-	resp, body := postForm(t, ts, "/edit/"+strconv.FormatInt(seed.ID, 10),
+	resp, body := postForm(t, ts, "/edit/expense/"+strconv.FormatInt(seed.ID, 10),
 		url.Values{"raw": {"12.50 dinner @home"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /edit status = %d, want 200 after redirect", resp.StatusCode)
@@ -157,7 +150,7 @@ func TestEditSaveKeepsIdentityRefreshesUpdatedAt(t *testing.T) {
 func TestEditSaveGateRejects(t *testing.T) {
 	ts, st, seed, _ := newEditFixture(t, "10 lunch @work")
 
-	resp, body := postForm(t, ts, "/edit/"+strconv.FormatInt(seed.ID, 10),
+	resp, body := postForm(t, ts, "/edit/expense/"+strconv.FormatInt(seed.ID, 10),
 		url.Values{"raw": {"lunch @work"}}) // no amount
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Errorf("rejected edit status = %d, want 422", resp.StatusCode)
@@ -186,7 +179,7 @@ func TestDeleteRemovesRow(t *testing.T) {
 	// means the row itself is still listed, not the placeholder echoing "lunch".
 	ts, st, seed, _ := newEditFixture(t, "7 popcorn")
 
-	resp, body := postForm(t, ts, "/delete/"+strconv.FormatInt(seed.ID, 10), url.Values{})
+	resp, body := postForm(t, ts, "/delete/expense/"+strconv.FormatInt(seed.ID, 10), url.Values{})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /delete status = %d, want 200 after redirect", resp.StatusCode)
 	}
@@ -209,11 +202,11 @@ func TestListWiresPerRowEditAndDelete(t *testing.T) {
 
 	_, body := get(t, ts, "/")
 	id := strconv.FormatInt(seed.ID, 10)
-	if !strings.Contains(body, `/edit/`+id) {
-		t.Errorf("list should link a per-row edit control to /edit/%s; got:\n%s", id, body)
+	if !strings.Contains(body, `/edit/expense/`+id) {
+		t.Errorf("list should link a per-row edit control to /edit/expense/%s; got:\n%s", id, body)
 	}
-	if !strings.Contains(body, `/delete/`+id) {
-		t.Errorf("list should wire a per-row delete control to /delete/%s; got:\n%s", id, body)
+	if !strings.Contains(body, `/delete/expense/`+id) {
+		t.Errorf("list should wire a per-row delete control to /delete/expense/%s; got:\n%s", id, body)
 	}
 	if strings.Contains(body, "disabled>edit") || strings.Contains(body, "disabled>delete") {
 		t.Errorf("edit/delete controls should no longer be disabled placeholders; got:\n%s", body)
@@ -229,7 +222,7 @@ func TestDeleteControlHasConfirmation(t *testing.T) {
 	_, body := get(t, ts, "/")
 	id := strconv.FormatInt(seed.ID, 10)
 
-	deleteFormStart := strings.Index(body, `action="/delete/`+id+`"`)
+	deleteFormStart := strings.Index(body, `action="/delete/expense/`+id+`"`)
 	if deleteFormStart == -1 {
 		t.Fatalf("delete form for id %s not found; got:\n%s", id, body)
 	}
@@ -259,9 +252,9 @@ func TestDeleteControlHasConfirmation(t *testing.T) {
 // A GET /edit for an unknown id is a 404, not a server error or a blank form.
 func TestEditFormUnknownID404(t *testing.T) {
 	ts := newTestServer(t)
-	resp, _ := get(t, ts, "/edit/999")
+	resp, _ := get(t, ts, "/edit/expense/999")
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("GET /edit/999 status = %d, want 404", resp.StatusCode)
+		t.Errorf("GET /edit/expense/999 status = %d, want 404", resp.StatusCode)
 	}
 }
 
@@ -280,13 +273,7 @@ func TestEditDoesNotShiftDateAfterTimePasses(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	parsed := expense.Parse("12 lunch -3", clk.now())
-	seed := &expense.Expense{
-		Date:        parsed.Date,
-		Amount:      parsed.Amount,
-		Description: parsed.Description,
-		Split:       parsed.Split,
-		RawText:     "12 lunch -3",
-	}
+	seed := expense.NewExpense(parsed.Date, parsed.Amount, parsed.Description, nil, parsed.Split, "12 lunch -3")
 	if err := st.Create(context.Background(), seed); err != nil {
 		t.Fatalf("seeding expense: %v", err)
 	}
@@ -304,13 +291,13 @@ func TestEditDoesNotShiftDateAfterTimePasses(t *testing.T) {
 
 	// The edit box holds the canonical line: the date is the absolute "18/7" the
 	// entry originally resolved to, not the stale "-3".
-	_, body := get(t, ts, "/edit/"+id)
+	_, body := get(t, ts, "/edit/expense/"+id)
 	if !strings.Contains(body, `value="12 lunch 18/7"`) {
 		t.Fatalf("edit box should hold the canonical line with the original absolute date; got:\n%s", body)
 	}
 
 	// Change only the amount and save the canonical line back.
-	resp, _ := postForm(t, ts, "/edit/"+id, url.Values{"raw": {"15 lunch 18/7"}})
+	resp, _ := postForm(t, ts, "/edit/expense/"+id, url.Values{"raw": {"15 lunch 18/7"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /edit status = %d, want 200 after redirect", resp.StatusCode)
 	}
@@ -339,18 +326,18 @@ func TestEditGuardsExpensesOlderThanAYear(t *testing.T) {
 
 	// The list shows the row but offers no Edit link for it (Delete stays).
 	_, body := get(t, ts, "/")
-	if strings.Contains(body, `/edit/`+id) {
+	if strings.Contains(body, `/edit/expense/`+id) {
 		t.Errorf("list should omit the Edit link for a too-old expense; got:\n%s", body)
 	}
-	if !strings.Contains(body, `/delete/`+id) {
+	if !strings.Contains(body, `/delete/expense/`+id) {
 		t.Errorf("a too-old expense should still be deletable; got:\n%s", body)
 	}
 
 	// The edit endpoints refuse it directly, with a bare 403.
-	if resp, _ := get(t, ts, "/edit/"+id); resp.StatusCode != http.StatusForbidden {
+	if resp, _ := get(t, ts, "/edit/expense/"+id); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("GET /edit for a too-old expense status = %d, want 403", resp.StatusCode)
 	}
-	resp, _ := postForm(t, ts, "/edit/"+id, url.Values{"raw": {"12 old 1/1/2020"}})
+	resp, _ := postForm(t, ts, "/edit/expense/"+id, url.Values{"raw": {"12 old 1/1/2020"}})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("POST /edit for a too-old expense status = %d, want 403", resp.StatusCode)
 	}

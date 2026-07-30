@@ -15,37 +15,37 @@ func ptr(s string) *string { return &s }
 func TestEntryLine(t *testing.T) {
 	tests := []struct {
 		name string
-		e    expense.Expense
+		e    *expense.Expense
 		want string
 	}{
 		{
 			name: "whole amount drops decimals",
-			e:    expense.Expense{Amount: 1000, Description: "lunch", Date: day(2026, 7, 5)},
+			e:    expense.NewExpense(day(2026, 7, 5), 1000, "lunch", nil, false, ""),
 			want: "10 lunch 5/7",
 		},
 		{
 			name: "two decimals kept",
-			e:    expense.Expense{Amount: 1250, Description: "lunch", Date: day(2026, 12, 24)},
+			e:    expense.NewExpense(day(2026, 12, 24), 1250, "lunch", nil, false, ""),
 			want: "12.50 lunch 24/12",
 		},
 		{
 			name: "single fractional digit padded",
-			e:    expense.Expense{Amount: 760, Description: "coffee", Date: day(2026, 1, 9)},
+			e:    expense.NewExpense(day(2026, 1, 9), 760, "coffee", nil, false, ""),
 			want: "7.60 coffee 9/1",
 		},
 		{
 			name: "account and split, fixed order",
-			e:    expense.Expense{Amount: 1000, Description: "dinner", Date: day(2026, 7, 5), Account: ptr("work"), Split: true},
+			e:    expense.NewExpense(day(2026, 7, 5), 1000, "dinner", ptr("work"), true, ""),
 			want: "10 dinner 5/7 @work *",
 		},
 		{
 			name: "empty account pointer omitted",
-			e:    expense.Expense{Amount: 1000, Description: "dinner", Date: day(2026, 7, 5), Account: ptr("")},
+			e:    expense.NewExpense(day(2026, 7, 5), 1000, "dinner", ptr(""), false, ""),
 			want: "10 dinner 5/7",
 		},
 		{
 			name: "today-dated expense still emits its date",
-			e:    expense.Expense{Amount: 500, Description: "gum", Date: day(2026, 7, 21)},
+			e:    expense.NewExpense(day(2026, 7, 21), 500, "gum", nil, false, ""),
 			want: "5 gum 21/7",
 		},
 	}
@@ -57,6 +57,43 @@ func TestEntryLine(t *testing.T) {
 		})
 	}
 }
+
+// TestIncomeEntryLine pins the income rendering: the amount carries the leading
+// '+' income sigil and a '*' is never emitted, over the same middle an expense
+// uses (ADR-0009).
+func TestIncomeEntryLine(t *testing.T) {
+	tests := []struct {
+		name string
+		i    *expense.Income
+		want string
+	}{
+		{
+			name: "whole amount gains the + sigil",
+			i:    expense.NewIncome(day(2026, 7, 5), 3000, "Bob's share", nil, nil, ""),
+			want: "+30 Bob's share 5/7",
+		},
+		{
+			name: "decimals kept behind the +",
+			i:    expense.NewIncome(day(2026, 7, 19), 1250, "x", ptr("bbva"), nil, ""),
+			want: "+12.50 x 19/7 @bbva",
+		},
+		{
+			name: "a linked payback renders like any income (link is out-of-band)",
+			i:    expense.NewIncome(day(2026, 7, 5), 500, "lunch payback", nil, ptr64(7), ""),
+			want: "+5 lunch payback 5/7",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.i.EntryLine(); got != tt.want {
+				t.Errorf("EntryLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// ptr64 returns a pointer to an int64, for building a linked payback's parent id.
+func ptr64(n int64) *int64 { return &n }
 
 // TestEntryLineRoundTrips is the core invariant, stated as the coupling between
 // EntryLine and Editable: whenever an expense is Editable as of some "now",
@@ -72,11 +109,11 @@ func TestEntryLineRoundTrips(t *testing.T) {
 		day(2027, 7, 20),  // just under a year later — still editable
 		day(2027, 7, 21),  // exactly a year later — NOT editable, must be skipped
 	}
-	exps := []expense.Expense{
-		{Amount: 1000, Description: "lunch", Date: day(2026, 7, 21)},
-		{Amount: 1250, Description: "dinner out", Date: day(2026, 7, 21), Account: ptr("work"), Split: true},
-		{Amount: 760, Description: "coffee 2 cups", Date: day(2026, 7, 21)}, // bare number stays in description
-		{Amount: 500, Description: "gum", Date: day(2025, 12, 24)},          // year-less DD/MM back-resolves
+	exps := []*expense.Expense{
+		expense.NewExpense(day(2026, 7, 21), 1000, "lunch", nil, false, ""),
+		expense.NewExpense(day(2026, 7, 21), 1250, "dinner out", ptr("work"), true, ""),
+		expense.NewExpense(day(2026, 7, 21), 760, "coffee 2 cups", nil, false, ""), // bare number stays in description
+		expense.NewExpense(day(2025, 12, 24), 500, "gum", nil, false, ""),          // year-less DD/MM back-resolves
 	}
 	asserted := 0
 	for _, e := range exps {
@@ -96,16 +133,63 @@ func TestEntryLineRoundTrips(t *testing.T) {
 				acc = *e.Account
 			}
 			if got.Amount != e.Amount || got.Description != e.Description ||
-				got.Account != acc || got.Split != e.Split || !got.Date.Equal(e.Date) {
-				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q split=%v date=%s\n want amount=%d desc=%q acc=%q split=%v date=%s",
+				got.Account != acc || got.Split != e.Split || got.IsIncome || !got.Date.Equal(e.Date) {
+				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q split=%v income=%v date=%s\n want amount=%d desc=%q acc=%q split=%v income=false date=%s",
 					line, now.Format("2006-01-02"),
-					got.Amount, got.Description, got.Account, got.Split, got.Date.Format("2006-01-02"),
+					got.Amount, got.Description, got.Account, got.Split, got.IsIncome, got.Date.Format("2006-01-02"),
 					e.Amount, e.Description, acc, e.Split, e.Date.Format("2006-01-02"))
 			}
 		}
 	}
 	if asserted == 0 {
 		t.Fatal("round-trip invariant was never exercised; check the now/expense fixtures")
+	}
+}
+
+// TestIncomeEntryLineRoundTrips mirrors the expense invariant for incomes: an
+// income's canonical entry line re-parses (within the editable window) to
+// IsIncome with the same fields and never a split (ADR-0009). LinkedExpenseID is
+// out-of-band and not part of the entry line, so it is preserved by the caller,
+// not the round-trip.
+func TestIncomeEntryLineRoundTrips(t *testing.T) {
+	nows := []time.Time{
+		day(2026, 7, 21),  // same day
+		day(2026, 12, 31), // months later, across the day-of-year
+		day(2027, 7, 20),  // just under a year later — still editable
+	}
+	incomes := []*expense.Income{
+		expense.NewIncome(day(2026, 7, 21), 3000, "Bob's share", nil, nil, ""),
+		expense.NewIncome(day(2026, 7, 21), 1250, "lunch payback", ptr("bbva"), ptr64(7), ""),
+		expense.NewIncome(day(2025, 12, 24), 500, "gift back", nil, nil, ""),
+	}
+	asserted := 0
+	for _, in := range incomes {
+		line := in.EntryLine()
+		for _, now := range nows {
+			if !expense.Editable(in.Date, now) {
+				continue
+			}
+			asserted++
+			got := expense.Parse(line, now)
+			if !got.OK() {
+				t.Errorf("Parse(%q, %s) has errors %v, want none", line, now.Format("2006-01-02"), got.Errors)
+				continue
+			}
+			acc := ""
+			if in.Account != nil {
+				acc = *in.Account
+			}
+			if got.Amount != in.Amount || got.Description != in.Description ||
+				got.Account != acc || got.Split || !got.IsIncome || !got.Date.Equal(in.Date) {
+				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q split=%v income=%v date=%s\n want amount=%d desc=%q acc=%q split=false income=true date=%s",
+					line, now.Format("2006-01-02"),
+					got.Amount, got.Description, got.Account, got.Split, got.IsIncome, got.Date.Format("2006-01-02"),
+					in.Amount, in.Description, acc, in.Date.Format("2006-01-02"))
+			}
+		}
+	}
+	if asserted == 0 {
+		t.Fatal("income round-trip invariant was never exercised; check the fixtures")
 	}
 }
 
