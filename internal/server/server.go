@@ -141,6 +141,10 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// Delete an expense.
 	mux.HandleFunc("POST /delete/{id}", s.handleDelete)
 
+	// Start a payback: prime the quick-add box in income mode, pre-linked to this
+	// expense (the link is set out-of-band, never typed). A 404 for an unknown id.
+	mux.HandleFunc("GET /payback/{id}", s.handlePaybackStart)
+
 	// Home page. Registered last as the catch-all for "/" so unknown paths 404.
 	mux.HandleFunc("GET /{$}", s.handleHome)
 
@@ -232,14 +236,26 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	s.renderPartial(w, "preview", buildPreview(raw, parsed, true, editing))
 }
 
-// renderForm loads the list, groups it by day, and renders the home page with
-// the given status and quick-add form state: the echoed raw line, the inline
-// preview, and where the form posts (addAction, or an /edit/{id} action in edit
-// mode). Every full-page render — plain home, save-gate rejection, and the edit
-// form — flows through here, so the list/group/render path lives in one place.
-// The inline preview is built non-interactively so the save control stays
-// enabled for a no-JS submit.
+// renderForm renders the home page with the given status and plain quick-add
+// form state: the echoed raw line, where the form posts (addAction, or an
+// /edit/{id} action in edit mode), and the edit-mode flag. It is the entry point
+// for every non-payback full-page render — plain home, save-gate rejection, and
+// the edit form — delegating to renderHome for the shared list/group/render.
 func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, raw, formAction string, editing bool) {
+	s.renderHome(w, r, status, homeView{
+		Raw:        raw,
+		FormAction: formAction,
+		Editing:    editing,
+	})
+}
+
+// renderHome loads the list, groups it by day, and renders the home page from a
+// partly-built homeView — filling in the shared chrome (htmx src, inline
+// preview, day groups) around whatever form state the caller set (plain add,
+// edit, or payback). Every full-page render flows through here, so the
+// list/group/render path lives in one place. The inline preview is built
+// non-interactively so the save control stays enabled for a no-JS submit.
+func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, v homeView) {
 	expenses, err := s.store.List(r.Context())
 	if err != nil {
 		log.Printf("listing expenses: %v", err)
@@ -252,15 +268,11 @@ func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	parsed := expense.Parse(raw, s.now())
-	s.render(w, status, homeView{
-		HTMXSrc:    s.htmxSrc,
-		Raw:        raw,
-		FormAction: formAction,
-		Editing:    editing,
-		Preview:    buildPreview(raw, parsed, false, editing),
-		Groups:     groupByDay(expenses, incomes, s.now()),
-	})
+	parsed := expense.Parse(v.Raw, s.now())
+	v.HTMXSrc = s.htmxSrc
+	v.Preview = buildPreview(v.Raw, parsed, false, v.Editing)
+	v.Groups = groupByDay(expenses, incomes, s.now())
+	s.render(w, status, v)
 }
 
 // handleAdd parses the submitted line, re-validates the save gate on the server
@@ -282,11 +294,16 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A '+' line is an income (ADR-0009). A standalone '+…' has no active link, so
-	// it stores with a nil LinkedExpenseID; the '*'-on-income case never reaches
-	// here because the save gate above rejects it (ErrSplitOnIncome).
+	// A '+' line is an income (ADR-0009). A hidden linked_expense_id — present
+	// only when the box was opened via a row's "+ payback" — links it to its
+	// parent out-of-band, making it a payback; absent, it stores as a standalone
+	// income with a nil link. The link is read only for an income and never from
+	// the entry text. The '*'-on-income case never reaches here because the save
+	// gate above rejects it (ErrSplitOnIncome).
 	if parsed.IsIncome {
-		if err := s.store.CreateIncome(r.Context(), newIncome(parsed, raw)); err != nil {
+		income := newIncome(parsed, raw)
+		income.LinkedExpenseID = linkedExpenseID(r)
+		if err := s.store.CreateIncome(r.Context(), income); err != nil {
 			log.Printf("creating income: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -392,6 +409,36 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// handlePaybackStart primes the quick-add box to log a payback against an
+// existing expense: income mode (the '+' sigil pre-filled), a non-editable chip
+// naming the parent, and a hidden linked_expense_id so the saved income links to
+// it out-of-band — the link is never expressible in the entry text (ADR-0009).
+// It loads the parent to name it in the chip and to 404 an unknown id; the
+// primed box still posts to /add, where the hidden link is read back.
+func (s *Server) handlePaybackStart(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	e, err := s.store.Get(r.Context(), id)
+	if respondStoreErr(w, r, "loading expense for payback", id, err) {
+		return
+	}
+	s.renderHome(w, r, http.StatusOK, homeView{
+		// Prime the '+' income sigil so the box opens in income mode and the user
+		// types only the amount and who paid it back.
+		Raw:               incomePrefix,
+		FormAction:        addAction,
+		Payback:           true,
+		LinkedExpenseID:   e.ID,
+		LinkedExpenseDesc: e.Description,
+	})
+}
+
+// incomePrefix is the leading '+' sigil that marks an entry as an income
+// (ADR-0009); it primes the payback box so the line is already in income mode.
+const incomePrefix = "+"
+
 // respondStoreErr maps a store error on the id-scoped operations to an HTTP
 // response — store.ErrNotFound to a 404, any other error to a logged 500 — and
 // reports whether it wrote one, so the caller returns on true and proceeds on a
@@ -430,13 +477,31 @@ func newExpense(p expense.ParsedEntry, raw string) *expense.Expense {
 	return expense.NewExpense(p.Date, p.Amount, p.Description, accountPtr(p.Account), p.Split, raw)
 }
 
-// newIncome turns a validated income parse result into the record to store. A
-// standalone '+…' line carries no link, so LinkedExpenseID is nil (a payback's
-// link is set out-of-band by a later slice, never through the entry line,
-// ADR-0009). A blank account is left nil so the store writes SQL NULL, and the
-// verbatim line is retained as RawText.
+// newIncome turns a validated income parse result into the record to store,
+// with a nil link — the caller sets LinkedExpenseID from the hidden field when
+// the income is a payback (ADR-0009), never from the entry line. A blank account
+// is left nil so the store writes SQL NULL, and the verbatim line is retained as
+// RawText.
 func newIncome(p expense.ParsedEntry, raw string) *expense.Income {
 	return expense.NewIncome(p.Date, p.Amount, p.Description, accountPtr(p.Account), nil, raw)
+}
+
+// linkedExpenseID reads the hidden linked_expense_id form field into the pointer
+// the store binds: nil when the field is absent, blank, or malformed (a
+// standalone income), else the parsed parent id (a payback). The field is set
+// out-of-band by the "+ payback" flow and never appears in the entry text
+// (ADR-0009); a bad value degrades to a standalone income rather than a 500, and
+// a non-existent id would be caught by the foreign-key constraint on insert.
+func linkedExpenseID(r *http.Request) *int64 {
+	v := strings.TrimSpace(r.PostFormValue("linked_expense_id"))
+	if v == "" {
+		return nil
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || id <= 0 {
+		return nil
+	}
+	return &id
 }
 
 // accountPtr turns the parser's bare account string into the nullable pointer

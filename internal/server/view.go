@@ -38,6 +38,17 @@ type homeView struct {
 	Preview previewView
 	// Groups is the list, newest day first, each with its rows and day total.
 	Groups []dayGroup
+	// Payback is true when the box was opened via a row's "+ payback" action
+	// (GET /payback/{expenseID}): it reveals the non-editable payback chip and
+	// carries the hidden LinkedExpenseID so the income saved from this box is
+	// linked to its parent out-of-band, never through the entry text (ADR-0009).
+	Payback bool
+	// LinkedExpenseID is the parent expense a payback links to, rendered as a
+	// hidden form field; meaningful only when Payback is true.
+	LinkedExpenseID int64
+	// LinkedExpenseDesc names the parent in the payback chip ("↩ payback → <desc>")
+	// so the user sees which expense this credit nets down.
+	LinkedExpenseDesc string
 }
 
 // previewView is the view model for the live-preview fragment: the resolved
@@ -161,6 +172,44 @@ type rowView struct {
 	// (its date a year old or older), so the list only offers edits that can't
 	// shift the date (ADR-0008). Always false for a credit row.
 	Editable bool
+
+	// Net-cost fields (ADR-0009), set only on a fronted expense — one with at
+	// least one linked payback (HasPaybacks). Net cost is derived at render time
+	// as paid − Σ paybacks and is never stored; the plain Amount above stays the
+	// full paid figure. An expense with no paybacks leaves all of these zero and
+	// renders exactly as it does today.
+	HasPaybacks bool
+	// Net is the derived net-cost headline, signed: "€40.00" when positive, or a
+	// green credit "−€10.00" when over-repaid (OverRepaid).
+	Net string
+	// Paid is the full paid amount ("€60.00"), shown struck-through beneath the
+	// net headline — the faithful transcript the stored amount still holds.
+	Paid string
+	// OverRepaid is true when Σ paybacks exceeds paid, so net is negative and
+	// renders green (ADR-0009 is ungated — over-repayment is allowed).
+	OverRepaid bool
+	// PaybackSum is the total credited by the paybacks, as a green "−€X.XX", shown
+	// in the "−€X.XX from N paybacks ▾" disclosure summary.
+	PaybackSum string
+	// PaybackCount is len(Paybacks), carried out so the template can pluralise the
+	// summary without a range.
+	PaybackCount int
+	// Paybacks is the nested breakdown revealed by the disclosure, each a credit
+	// with its own description, account, and date (ADR-0009).
+	Paybacks []paybackView
+}
+
+// paybackView is one linked payback in a fronted expense's disclosure: a credit
+// carrying its own amount, description, account, and date — each independent of
+// the parent expense (ADR-0009). Account is always non-blank, surfacing as
+// "@personal" (AccountDefault true) when the payback named none, exactly like a
+// row.
+type paybackView struct {
+	Amount         string // the credit magnitude as "−€X.XX"
+	Description    string
+	Account        string // "@bbva", or "@personal" when defaulted
+	AccountDefault bool
+	DateLabel      string // the payback's own date, e.g. "Thu 30 Jul"
 }
 
 const (
@@ -191,30 +240,69 @@ type feedItem struct {
 // incomes alike. Each group's total is the sum of its expenses' net cost only —
 // a standalone income renders as a green credit row but does not move it, so the
 // total keeps meaning "what the day cost me". Linked paybacks (a non-nil
-// LinkedExpenseID) are not standalone rows and are skipped here; they attach to
-// their expense in a later slice.
+// LinkedExpenseID) are not standalone rows: they are bucketed onto their parent
+// expense, where the derived net cost (paid − Σ paybacks) nets the parent's
+// contribution to its day total.
 func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.Time) []dayGroup {
-	feed := make([]feedItem, 0, len(expenses)+len(incomes))
+	// Two bulk reads, one in-memory stitch (ADR-0009): bucket the incomes by their
+	// linked_expense_id, so each expense can attach its paybacks; a nil link is a
+	// standalone credit that stays a feed row of its own.
+	paybacks := make(map[int64][]expense.Income)
+	var standalone []expense.Income
+	for _, i := range incomes {
+		if i.LinkedExpenseID != nil {
+			id := *i.LinkedExpenseID
+			paybacks[id] = append(paybacks[id], i)
+		} else {
+			standalone = append(standalone, i)
+		}
+	}
+
+	feed := make([]feedItem, 0, len(expenses)+len(standalone))
 	for _, e := range expenses {
+		row := rowView{
+			ID:             e.ID,
+			Amount:         formatEuro(e.Amount),
+			Description:    e.Description,
+			Account:        accountLabel(e.Account),
+			AccountDefault: e.Account == nil,
+			Split:          e.Split,
+			Editable:       expense.Editable(e.Date, now),
+		}
+		// Net cost is derived here, never stored (ADR-0001 untouched): the row's
+		// contribution to its day total is the full paid amount, less its paybacks.
+		cost := e.Amount
+		if pbs := paybacks[e.ID]; len(pbs) > 0 {
+			sum := 0
+			views := make([]paybackView, 0, len(pbs))
+			for _, p := range pbs {
+				sum += p.Amount
+				views = append(views, paybackView{
+					Amount:         formatCredit(p.Amount),
+					Description:    p.Description,
+					Account:        accountLabel(p.Account),
+					AccountDefault: p.Account == nil,
+					DateLabel:      p.Date.Format(dayLabelLayout),
+				})
+			}
+			net := e.Amount - sum
+			cost = net
+			row.HasPaybacks = true
+			row.Net = formatNet(net)
+			row.Paid = formatEuro(e.Amount)
+			row.OverRepaid = net < 0
+			row.PaybackSum = formatCredit(sum)
+			row.PaybackCount = len(pbs)
+			row.Paybacks = views
+		}
 		feed = append(feed, feedItem{
 			date:      e.Date,
 			createdAt: e.CreatedAt,
-			cost:      e.Amount,
-			row: rowView{
-				ID:             e.ID,
-				Amount:         formatEuro(e.Amount),
-				Description:    e.Description,
-				Account:        accountLabel(e.Account),
-				AccountDefault: e.Account == nil,
-				Split:          e.Split,
-				Editable:       expense.Editable(e.Date, now),
-			},
+			cost:      cost,
+			row:       row,
 		})
 	}
-	for _, i := range incomes {
-		if i.LinkedExpenseID != nil {
-			continue // a payback, attached to its expense in a later slice
-		}
+	for _, i := range standalone {
 		feed = append(feed, feedItem{
 			date:      i.Date,
 			createdAt: i.CreatedAt,
@@ -253,7 +341,10 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 		g := &groups[len(groups)-1]
 		g.Rows = append(g.Rows, it.row)
 		curTotal += it.cost
-		g.Total = formatEuro(curTotal)
+		// formatNet, not formatEuro: an over-repaid expense can net a whole day's
+		// cost below zero (ADR-0009 is ungated), which must render as a signed
+		// green credit rather than a malformed euro string.
+		g.Total = formatNet(curTotal)
 	}
 	return groups
 }
@@ -261,6 +352,17 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 // formatEuro renders integer minor units (cents) as "€X.XX".
 func formatEuro(minorUnits int) string {
 	return fmt.Sprintf("€%d.%02d", minorUnits/100, minorUnits%100)
+}
+
+// formatNet renders a derived net cost, which may be negative when an expense is
+// over-repaid (ADR-0009). A non-negative net is a plain "€X.XX"; a negative net
+// is a green credit "−€X.XX" of its magnitude, reusing formatCredit so the minus
+// glyph and formatting can't drift from the credit chip.
+func formatNet(net int) string {
+	if net < 0 {
+		return formatCredit(-net)
+	}
+	return formatEuro(net)
 }
 
 // formatCredit renders an income's positive magnitude as a credit "−€X.XX",
