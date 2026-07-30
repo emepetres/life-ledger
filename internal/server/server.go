@@ -33,15 +33,18 @@ func init() {
 	_ = mime.AddExtensionType(".js", "text/javascript; charset=utf-8")
 }
 
-// Store is the persistence surface the server needs: list every expense
-// (newest-first, for day grouping), create one, load one back by id to edit,
-// update it in place, and delete it. It is an interface so the HTTP layer
-// depends only on the behaviour it uses and tests can drive it against a real
-// temp-file store. Get, Update, and Delete report store.ErrNotFound for an
-// unknown id, which the handlers translate to a 404.
+// Store is the persistence surface the server needs: list every expense and
+// every income (both newest-first, for the interleaved day grouping), create
+// either, load an expense back by id to edit, update it in place, and delete it.
+// It is an interface so the HTTP layer depends only on the behaviour it uses and
+// tests can drive it against a real temp-file store. Get, Update, and Delete
+// report store.ErrNotFound for an unknown id, which the handlers translate to a
+// 404. (Income edit/delete arrive with the kind-qualified routes, ADR-0009.)
 type Store interface {
 	List(ctx context.Context) ([]expense.Expense, error)
+	ListIncomes(ctx context.Context) ([]expense.Income, error)
 	Create(ctx context.Context, e *expense.Expense) error
+	CreateIncome(ctx context.Context, i *expense.Income) error
 	Get(ctx context.Context, id int64) (expense.Expense, error)
 	Update(ctx context.Context, e *expense.Expense) error
 	Delete(ctx context.Context, id int64) error
@@ -243,6 +246,12 @@ func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	incomes, err := s.store.ListIncomes(r.Context())
+	if err != nil {
+		log.Printf("listing incomes: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	parsed := expense.Parse(raw, s.now())
 	s.render(w, status, homeView{
 		HTMXSrc:    s.htmxSrc,
@@ -250,7 +259,7 @@ func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, 
 		FormAction: formAction,
 		Editing:    editing,
 		Preview:    buildPreview(raw, parsed, false, editing),
-		Groups:     groupByDay(expenses, s.now()),
+		Groups:     groupByDay(expenses, incomes, s.now()),
 	})
 }
 
@@ -270,6 +279,19 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	parsed := expense.Parse(raw, s.now())
 	if !parsed.OK() {
 		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
+		return
+	}
+
+	// A '+' line is an income (ADR-0009). A standalone '+…' has no active link, so
+	// it stores with a nil LinkedExpenseID; the '*'-on-income case never reaches
+	// here because the save gate above rejects it (ErrSplitOnIncome).
+	if parsed.IsIncome {
+		if err := s.store.CreateIncome(r.Context(), newIncome(parsed, raw)); err != nil {
+			log.Printf("creating income: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 
@@ -405,12 +427,27 @@ func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // nil so the store writes SQL NULL, and the verbatim line is retained as
 // RawText. The store fills in the identity and timestamps.
 func newExpense(p expense.ParsedEntry, raw string) *expense.Expense {
-	var account *string
-	if p.Account != "" {
-		a := p.Account
-		account = &a
+	return expense.NewExpense(p.Date, p.Amount, p.Description, accountPtr(p.Account), p.Split, raw)
+}
+
+// newIncome turns a validated income parse result into the record to store. A
+// standalone '+…' line carries no link, so LinkedExpenseID is nil (a payback's
+// link is set out-of-band by a later slice, never through the entry line,
+// ADR-0009). A blank account is left nil so the store writes SQL NULL, and the
+// verbatim line is retained as RawText.
+func newIncome(p expense.ParsedEntry, raw string) *expense.Income {
+	return expense.NewIncome(p.Date, p.Amount, p.Description, accountPtr(p.Account), nil, raw)
+}
+
+// accountPtr turns the parser's bare account string into the nullable pointer
+// the store binds: nil for a blank account (written as SQL NULL), else its
+// address. Shared by newExpense and newIncome so the NULL-vs-empty rule can't
+// drift between the two.
+func accountPtr(account string) *string {
+	if account == "" {
+		return nil
 	}
-	return expense.NewExpense(p.Date, p.Amount, p.Description, account, p.Split, raw)
+	return &account
 }
 
 // render executes the home template at the given status.
@@ -446,6 +483,7 @@ var saveGateMessages = map[expense.ParseError]string{
 	expense.ErrEmptyDescription: "needs a description",
 	expense.ErrTwoDateTokens:    "two dates",
 	expense.ErrTwoAccounts:      "two @accounts",
+	expense.ErrSplitOnIncome:    "cannot split an income",
 }
 
 // errorMessages maps the parser's save-gate violations to the user-facing

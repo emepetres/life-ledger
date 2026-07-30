@@ -14,6 +14,8 @@
   --accent: #2f6f4f;
   --accent-soft: #e6f2ec;
   --amount: #14532d;
+  --credit: #047857;
+  --credit-soft: #d1fae5;
   --split: #b45309;
   --split-soft: #fdf0dd;
   --acct: #3730a3;
@@ -94,6 +96,8 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   margin-top: 10px; min-height: 26px;
 }
 .chip.amount { background: var(--accent-soft); color: var(--amount); font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Income preview: a green credit chip so a '+' line reads as money in (ADR-0009). */
+.chip.amount.credit { background: var(--credit-soft); color: var(--credit); }
 .chip.date { background: #eef2f7; color: #334155; }
 .chip.desc { background: transparent; color: var(--ink); padding-left: 0; font-weight: 600; }
 .chip.muted { background: none; color: var(--muted); }
@@ -127,6 +131,9 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   font-family: var(--mono); font-weight: 700; color: var(--amount);
   text-align: right; font-variant-numeric: tabular-nums;
 }
+/* A standalone income renders as a green credit row — the "−€X.XX" amount in a
+   distinct credit green so money in reads apart from an expense (ADR-0009). */
+.row.credit .amt { color: var(--credit); }
 .desc-cell { min-width: 0; }
 .desc-cell .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .meta-m { display: none; gap: 6px; margin-top: 4px; align-items: center; } /* mobile-only */
