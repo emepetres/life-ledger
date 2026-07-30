@@ -20,10 +20,10 @@ func day(y int, m time.Month, d int) time.Time {
 
 func TestParse(t *testing.T) {
 	tests := []struct {
-		name        string
-		raw         string
-		wantAmount  int
-		wantHasAmt  bool
+		name         string
+		raw          string
+		wantAmount   int
+		wantHasAmt   bool
 		wantDesc     string
 		wantAccount  string
 		wantSplit    bool
