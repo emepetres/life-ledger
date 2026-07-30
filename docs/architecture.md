@@ -22,17 +22,25 @@ cmd/life-ledger/     Entrypoint: reads config from the environment, wires the
                      on a minimal container image (ADR-0005).
 cmd/hashpw/          Dev helper: bcrypt-hash a password for LIFELEDGER_PASSWORD_HASH.
 
-internal/expense/    Domain core. The free-text parser (raw line -> ParsedExpense)
-                     and the Expense record. Pure functions, no I/O — the single
-                     source of parse truth shared by the add, edit, and preview
-                     paths. (ADR-0001, ADR-0002)
+internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
+                     and the Expense and Income records — two public types over a
+                     shared unexported `entry` base; an Income is an expense-but-
+                     negative, minus the `*` split marker, and a Payback is an
+                     Income linked to an Expense. Pure functions, no I/O — the
+                     single source of parse truth shared by the add, edit, and
+                     preview paths. (ADR-0001, ADR-0002, ADR-0009)
 internal/store/      Persistence. A repository over one SQLite file via the
                      pure-Go modernc.org/sqlite driver; owns the self-creating
                      startup path and embedded goose migrations, and sets the
-                     WAL / foreign_keys / busy_timeout pragmas. An optional
-                     Backup sink (WithBackup) makes it durable on ephemeral
-                     storage: a consistent VACUUM INTO snapshot is saved after
-                     each write, and a cold boot restores from it. (ADR-0003)
+                     WAL / foreign_keys / busy_timeout pragmas. Two tables:
+                     `expense` and `income` (income.linked_expense_id ->
+                     expense.id ON DELETE CASCADE); a thin per-table repository
+                     (List / ListIncomes + per-record CRUD) — netting and
+                     interleaving are the server's job, not the store's. An
+                     optional Backup sink (WithBackup) makes it durable on
+                     ephemeral storage: a consistent VACUUM INTO snapshot is saved
+                     after each write, and a cold boot restores from it.
+                     (ADR-0003, ADR-0009)
 internal/blobbackup/ Production implementation of store.Backup: a thin adapter
                      that snapshots the SQLite database to a single Azure Blob
                      (managed identity, no account key) and restores it on a cold
@@ -43,9 +51,14 @@ internal/auth/       Access control. The protective middleware, the HMAC-signed
                      stateless session cookie, and a per-IP in-memory login rate
                      limiter. (ADR-0004)
 internal/server/     HTTP surface. Routes and handlers for the home page,
-                     add/edit/delete, the live-preview fragment, login/logout,
-                     and the unauthenticated health check; renders html/template
-                     views and htmx fragments.
+                     add/preview (shared by expenses and incomes, branching on the
+                     parsed IsIncome flag), kind-qualified edit/delete
+                     (/edit/{kind}/{id}, /delete/{kind}/{id}), the pre-linked
+                     payback start (/payback/{expenseID}), login/logout, and the
+                     unauthenticated health check. view.go assembles the net-first,
+                     day-grouped feed (net cost derived at render time; stored
+                     amount stays full) into one discriminated rowView; renders
+                     html/template views and htmx fragments. (ADR-0009)
 web/                 go:embed'd assets: templates/ (html/template sources) and
                      static/vendor/ (the version-pinned htmx script — no CDN).
 ```
@@ -82,9 +95,9 @@ out of the persistence core and out of every test.
 
 `internal/expense` is the leaf domain package — everything depends inward on it,
 and it depends on nothing. The `server` package defines its own narrow `Store`
-interface (the five methods it uses), so the HTTP layer depends on behaviour, not
-on the concrete SQLite store — which is what lets the handlers be tested as a
-black box against a real temp-file store.
+interface (the expense CRUD + list plus the income CRUD + `ListIncomes`), so the
+HTTP layer depends on behaviour, not on the concrete SQLite store — which is what
+lets the handlers be tested as a black box against a real temp-file store.
 
 ## Request flow
 
@@ -213,5 +226,7 @@ flowchart LR
 - [ADR-0005](adr/0005-deploy-azure-cicd.md) — deploy to Azure via Bicep + GitHub Actions
 - [ADR-0006](adr/0006-user-assigned-identity-for-acr-pull.md) — user-assigned identity for ACR pull
 - [ADR-0007](adr/0007-scheduled-retained-backup.md) — scheduled retained backup + restore runbook
+- [ADR-0008](adr/0008-canonical-entry-line-edit.md) — canonical entry line on edit; edits capped at 12 months
+- [ADR-0009](adr/0009-income-and-paybacks.md) — income & paybacks: record shape, entry syntax, net cost
 
 Operational runbooks live in [docs/deployment/](deployment/): [first-deploy.md](deployment/first-deploy.md) and [restore-runbook.md](deployment/restore-runbook.md).
