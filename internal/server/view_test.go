@@ -65,9 +65,14 @@ func TestGroupByDayInterleavesCreditWithoutMovingTotal(t *testing.T) {
 	if g.Rows[0].Amount != "−€40.00" {
 		t.Errorf("credit amount = %q, want −€40.00", g.Rows[0].Amount)
 	}
-	// The credit row is display-only: no edit/delete affordance.
-	if g.Rows[0].Editable {
-		t.Errorf("credit row Editable = true, want false (display-only this slice)")
+	// A recent standalone income is editable, gated by the same one-year cutoff as
+	// an expense (ADR-0008); its row carries the id so its kind-qualified controls
+	// can target /edit/income and /delete/income (ADR-0009).
+	if !g.Rows[0].Editable {
+		t.Errorf("recent credit row Editable = false, want true (within the edit cutoff)")
+	}
+	if g.Rows[0].ID != 1 {
+		t.Errorf("credit row ID = %d, want 1 (threaded through for its controls)", g.Rows[0].ID)
 	}
 	for _, r := range g.Rows[1:] {
 		if r.IsCredit {

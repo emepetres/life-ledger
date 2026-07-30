@@ -176,6 +176,118 @@ func TestDeleteExpenseCascadesPaybacks(t *testing.T) {
 	}
 }
 
+// AC: GetIncome round-trips a stored income by id, and reports ErrNotFound for
+// an unknown id (mirroring Get for expenses).
+func TestGetIncomeRoundTripsAndNotFound(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	i := expense.NewIncome(baseTime, 3000, "Bob share", ptr("bbva"), nil, "+30 Bob share @bbva")
+	if err := s.CreateIncome(ctx, i); err != nil {
+		t.Fatalf("CreateIncome: %v", err)
+	}
+
+	got, err := s.GetIncome(ctx, i.ID)
+	if err != nil {
+		t.Fatalf("GetIncome: %v", err)
+	}
+	if got.ID != i.ID || got.Amount != 3000 || got.Description != "Bob share" {
+		t.Errorf("GetIncome = %+v, want the seeded income", got)
+	}
+	if got.Account == nil || *got.Account != "bbva" {
+		t.Errorf("Account = %v, want \"bbva\"", got.Account)
+	}
+
+	if _, err := s.GetIncome(ctx, 999); err != store.ErrNotFound {
+		t.Errorf("GetIncome unknown err = %v, want ErrNotFound", err)
+	}
+}
+
+// AC: UpdateIncome refreshes updated_at and keeps identity (id, created_at); it
+// preserves linked_expense_id even when the passed record carries a nil link, so
+// fixing a payback's amount/account never re-parents it (ADR-0009). An unknown id
+// is ErrNotFound.
+func TestUpdateIncomePreservesLinkAndIdentity(t *testing.T) {
+	clk := &fakeClock{t: baseTime}
+	s := openTemp(t, store.WithClock(clk.now))
+	ctx := context.Background()
+
+	// A parent expense and a payback linked to it.
+	parent := expense.NewExpense(baseTime, 9000, "team lunch", nil, true, "90 team lunch *")
+	if err := s.Create(ctx, parent); err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	pb := expense.NewIncome(baseTime, 3000, "Bob share", ptr("bbva"), &parent.ID, "+30 Bob share @bbva")
+	if err := s.CreateIncome(ctx, pb); err != nil {
+		t.Fatalf("CreateIncome payback: %v", err)
+	}
+	origID, origCreated := pb.ID, pb.CreatedAt
+
+	// Edit the payback: change amount and account, and deliberately pass a nil
+	// link — the store must keep the stored parent link rather than detach it.
+	clk.advance(48 * time.Hour)
+	edited := expense.NewIncome(baseTime, 3500, "Bob share", ptr("amex"), nil, "+35 Bob share @amex")
+	edited.ID = origID
+	if err := s.UpdateIncome(ctx, edited); err != nil {
+		t.Fatalf("UpdateIncome: %v", err)
+	}
+
+	got, err := s.GetIncome(ctx, origID)
+	if err != nil {
+		t.Fatalf("GetIncome after update: %v", err)
+	}
+	if got.ID != origID {
+		t.Errorf("ID = %d, want %d (identity must be kept)", got.ID, origID)
+	}
+	if !got.CreatedAt.Equal(origCreated) {
+		t.Errorf("CreatedAt = %v, want %v (must not change on update)", got.CreatedAt, origCreated)
+	}
+	if !got.UpdatedAt.Equal(baseTime.Add(48 * time.Hour)) {
+		t.Errorf("UpdatedAt = %v, want %v (refreshed)", got.UpdatedAt, baseTime.Add(48*time.Hour))
+	}
+	if got.LinkedExpenseID == nil || *got.LinkedExpenseID != parent.ID {
+		t.Errorf("LinkedExpenseID = %v, want %d (link must survive the edit)", got.LinkedExpenseID, parent.ID)
+	}
+	if got.Amount != 3500 || got.Account == nil || *got.Account != "amex" {
+		t.Errorf("edited fields not persisted: %+v", got)
+	}
+
+	unknown := expense.NewIncome(baseTime, 1, "x", nil, nil, "+1 x")
+	unknown.ID = 999
+	if err := s.UpdateIncome(ctx, unknown); err != store.ErrNotFound {
+		t.Errorf("UpdateIncome unknown err = %v, want ErrNotFound", err)
+	}
+}
+
+// AC: DeleteIncome removes a single income by id and reports ErrNotFound for an
+// unknown id. It targets the income table only, leaving expenses untouched.
+func TestDeleteIncomeRemovesAndNotFound(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	i := expense.NewIncome(baseTime, 500, "cash back", nil, nil, "+5 cash back")
+	if err := s.CreateIncome(ctx, i); err != nil {
+		t.Fatalf("CreateIncome: %v", err)
+	}
+	if err := s.DeleteIncome(ctx, i.ID); err != nil {
+		t.Fatalf("DeleteIncome: %v", err)
+	}
+	if _, err := s.GetIncome(ctx, i.ID); err != store.ErrNotFound {
+		t.Errorf("GetIncome after DeleteIncome err = %v, want ErrNotFound", err)
+	}
+	got, err := s.ListIncomes(ctx)
+	if err != nil {
+		t.Fatalf("ListIncomes: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListIncomes after delete = %d rows, want 0", len(got))
+	}
+
+	if err := s.DeleteIncome(ctx, 999); err != store.ErrNotFound {
+		t.Errorf("DeleteIncome unknown err = %v, want ErrNotFound", err)
+	}
+}
+
 // The description save gate lives in the parser, not the store; an empty
 // description still stores here (the store is a thin repository). Guard against
 // accidentally adding a store-level constraint that would surprise callers.

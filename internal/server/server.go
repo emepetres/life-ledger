@@ -35,19 +35,22 @@ func init() {
 
 // Store is the persistence surface the server needs: list every expense and
 // every income (both newest-first, for the interleaved day grouping), create
-// either, load an expense back by id to edit, update it in place, and delete it.
-// It is an interface so the HTTP layer depends only on the behaviour it uses and
-// tests can drive it against a real temp-file store. Get, Update, and Delete
-// report store.ErrNotFound for an unknown id, which the handlers translate to a
-// 404. (Income edit/delete arrive with the kind-qualified routes, ADR-0009.)
+// either, and load / update / delete either kind by id. It is an interface so
+// the HTTP layer depends only on the behaviour it uses and tests can drive it
+// against a real temp-file store. The Get/Update/Delete pairs report
+// store.ErrNotFound for an unknown id, which the kind-qualified edit/delete
+// handlers translate to a 404 (ADR-0009).
 type Store interface {
 	List(ctx context.Context) ([]expense.Expense, error)
 	ListIncomes(ctx context.Context) ([]expense.Income, error)
 	Create(ctx context.Context, e *expense.Expense) error
 	CreateIncome(ctx context.Context, i *expense.Income) error
 	Get(ctx context.Context, id int64) (expense.Expense, error)
+	GetIncome(ctx context.Context, id int64) (expense.Income, error)
 	Update(ctx context.Context, e *expense.Expense) error
+	UpdateIncome(ctx context.Context, i *expense.Income) error
 	Delete(ctx context.Context, id int64) error
+	DeleteIncome(ctx context.Context, id int64) error
 }
 
 // Server holds the wired dependencies shared by all handlers.
@@ -131,15 +134,18 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// Add an expense: parse, re-validate the save gate server-side, persist.
 	mux.HandleFunc("POST /add", s.handleAdd)
 
-	// Edit an expense in place: GET loads its raw_text back into the quick-add
-	// box (edit mode); POST re-validates the save gate and updates it, keeping the
-	// identity and refreshing updated_at. Both reuse the add path's parse +
-	// preview + save-gate machinery so editing behaves identically to adding.
-	mux.HandleFunc("GET /edit/{id}", s.handleEditForm)
-	mux.HandleFunc("POST /edit/{id}", s.handleEditSave)
+	// Edit a record in place, kind-qualified for {expense, income} (ADR-0009):
+	// GET loads its canonical entry line back into the quick-add box (edit mode);
+	// POST re-validates the save gate and updates it, keeping the identity and
+	// refreshing updated_at. Both reuse the add path's parse + preview + save-gate
+	// machinery so editing behaves identically to adding, switching only the store
+	// method by kind. An unknown kind is a 404.
+	mux.HandleFunc("GET /edit/{kind}/{id}", s.handleEditForm)
+	mux.HandleFunc("POST /edit/{kind}/{id}", s.handleEditSave)
 
-	// Delete an expense.
-	mux.HandleFunc("POST /delete/{id}", s.handleDelete)
+	// Delete a record, kind-qualified for {expense, income}. Deleting a fronted
+	// expense cascade-deletes its paybacks at the schema level (ADR-0009).
+	mux.HandleFunc("POST /delete/{kind}/{id}", s.handleDelete)
 
 	// Start a payback: prime the quick-add box in income mode, pre-linked to this
 	// expense (the link is set out-of-band, never typed). A 404 for an unknown id.
@@ -238,14 +244,30 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 
 // renderForm renders the home page with the given status and plain quick-add
 // form state: the echoed raw line, where the form posts (addAction, or an
-// /edit/{id} action in edit mode), and the edit-mode flag. It is the entry point
-// for every non-payback full-page render — plain home, save-gate rejection, and
-// the edit form — delegating to renderHome for the shared list/group/render.
+// /edit/expense/{id} action in edit mode), and the edit-mode flag. It is the
+// entry point for the expense-side full-page renders — plain home, save-gate
+// rejection, and the expense edit form — delegating to renderHome for the shared
+// list/group/render. The income edit form renders through renderIncomeEditForm
+// instead, since it also carries the kind-aware Income flag (ADR-0009).
 func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, raw, formAction string, editing bool) {
 	s.renderHome(w, r, status, homeView{
 		Raw:        raw,
 		FormAction: formAction,
 		Editing:    editing,
+	})
+}
+
+// renderIncomeEditForm renders the home page with the quick-add box in income
+// edit mode: the canonical line echoed into the box, the kind-qualified income
+// edit action, and the Income flag so the edit heading names the right kind
+// (ADR-0009). It is renderForm's income twin, sharing the one homeView shape
+// across both the GET form load and the save-gate re-render.
+func (s *Server) renderIncomeEditForm(w http.ResponseWriter, r *http.Request, status int, raw string, id int64) {
+	s.renderHome(w, r, status, homeView{
+		Raw:        raw,
+		FormAction: editAction(kindIncome, id),
+		Editing:    true,
+		Income:     true,
 	})
 }
 
@@ -322,22 +344,45 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 // addAction is the quick-add form's action in add mode; edit mode swaps in an
-// "/edit/{id}" action built by editAction.
+// "/edit/{kind}/{id}" action built by editAction.
 const addAction = "/add"
 
-// editAction is the quick-add form's action when editing the given expense.
-func editAction(id int64) string {
-	return "/edit/" + strconv.FormatInt(id, 10)
+// kindExpense and kindIncome are the two record kinds the edit/delete routes are
+// qualified by (ADR-0009); they are the only accepted {kind} path values.
+const (
+	kindExpense = "expense"
+	kindIncome  = "income"
+)
+
+// editAction is the quick-add form's action when editing the given record: the
+// kind-qualified "/edit/{kind}/{id}" endpoint.
+func editAction(kind string, id int64) string {
+	return "/edit/" + kind + "/" + strconv.FormatInt(id, 10)
 }
 
-// handleEditForm loads the expense's original raw_text back into the quick-add
-// box in edit mode, reusing the same inline preview + save gate as adding. An
-// unknown or non-numeric id is a 404.
+// handleEditForm loads a record's canonical entry line back into the quick-add
+// box in edit mode, switching store method by the {kind} path value. An unknown
+// or non-numeric id is a 404, as is an unrecognised kind.
 func (s *Server) handleEditForm(w http.ResponseWriter, r *http.Request) {
+	kind, ok := parseKind(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
 	}
+	if kind == kindIncome {
+		s.editFormIncome(w, r, id)
+		return
+	}
+	s.editFormExpense(w, r, id)
+}
+
+// editFormExpense loads the expense's canonical entry line into the quick-add box
+// in edit mode, reusing the same inline preview + save gate as adding. An unknown
+// id is a 404; an expense too old to edit (ADR-0008) is a 403.
+func (s *Server) editFormExpense(w http.ResponseWriter, r *http.Request, id int64) {
 	e, err := s.store.Get(r.Context(), id)
 	if respondStoreErr(w, r, "loading expense for edit", id, err) {
 		return
@@ -349,16 +394,37 @@ func (s *Server) handleEditForm(w http.ResponseWriter, r *http.Request) {
 	// Edit the canonical entry line rendered from the stored fields, not the
 	// verbatim raw_text: its date is absolute, so re-parsing on save can't shift
 	// it (ADR-0008).
-	s.renderForm(w, r, http.StatusOK, e.EntryLine(), editAction(id), true)
+	s.renderForm(w, r, http.StatusOK, e.EntryLine(), editAction(kindExpense, id), true)
+}
+
+// editFormIncome is editFormExpense's income twin: it loads the income's
+// canonical entry line (the leading '+' sigil and all) into the box, capped by
+// the same Editable cutoff (ADR-0008). A payback's parent link is not expressible
+// in the line and is preserved out-of-band on save (ADR-0009), so nothing extra
+// is threaded through the form. An unknown id is a 404; too-old is a 403.
+func (s *Server) editFormIncome(w http.ResponseWriter, r *http.Request, id int64) {
+	i, err := s.store.GetIncome(r.Context(), id)
+	if respondStoreErr(w, r, "loading income for edit", id, err) {
+		return
+	}
+	if !expense.Editable(i.Date, s.now()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.renderIncomeEditForm(w, r, http.StatusOK, i.EntryLine(), id)
 }
 
 // handleEditSave re-parses the edited line, re-validates the save gate on the
 // server (so an entry that skipped the client is still refused), and updates the
-// expense in place — keeping its identity (id, created_at) and refreshing
-// updated_at (ADR-0001). On success it redirects home (Post/Redirect/Get); on a
-// save-gate violation it re-renders the form in edit mode at 422, changing
-// nothing; an unknown id is a 404.
+// record in place, switching store method by the {kind} path value. On success
+// it redirects home (Post/Redirect/Get); on a save-gate violation it re-renders
+// the form in edit mode at 422, changing nothing; an unknown id (or kind) is a
+// 404, and a record too old to edit (ADR-0008) a 403.
 func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
+	kind, ok := parseKind(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
@@ -367,9 +433,18 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	// Guard on the stored date, never the submitted line: an expense too old to
-	// edit (ADR-0008) is refused even on a direct POST that skipped the list's
-	// hidden Edit link.
+	if kind == kindIncome {
+		s.editSaveIncome(w, r, id)
+		return
+	}
+	s.editSaveExpense(w, r, id)
+}
+
+// editSaveExpense updates an expense from the edited line, keeping its identity
+// (id, created_at) and refreshing updated_at (ADR-0001). It guards on the stored
+// date, never the submitted line, so an expense too old to edit is refused even
+// on a direct POST that skipped the list's Edit link.
+func (s *Server) editSaveExpense(w http.ResponseWriter, r *http.Request, id int64) {
 	existing, err := s.store.Get(r.Context(), id)
 	if respondStoreErr(w, r, "loading expense for edit", id, err) {
 		return
@@ -383,7 +458,7 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 
 	parsed := expense.Parse(raw, s.now())
 	if !parsed.OK() {
-		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, editAction(id), true)
+		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, editAction(kindExpense, id), true)
 		return
 	}
 
@@ -396,14 +471,59 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// handleDelete removes the expense, then redirects home (Post/Redirect/Get). An
-// unknown id is a 404.
+// editSaveIncome is editSaveExpense's income twin. It builds the income from the
+// parsed line with a nil link and lets the store preserve the stored
+// linked_expense_id: an edit never re-parents a payback (ADR-0009), so fixing an
+// amount or account can't detach it from its ticket. The kind is fixed by the
+// route, so the record stays an income regardless of what the edited line parses
+// to.
+func (s *Server) editSaveIncome(w http.ResponseWriter, r *http.Request, id int64) {
+	existing, err := s.store.GetIncome(r.Context(), id)
+	if respondStoreErr(w, r, "loading income for edit", id, err) {
+		return
+	}
+	if !expense.Editable(existing.Date, s.now()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	raw := r.PostFormValue("raw")
+
+	parsed := expense.Parse(raw, s.now())
+	if !parsed.OK() {
+		s.renderIncomeEditForm(w, r, http.StatusUnprocessableEntity, raw, id)
+		return
+	}
+
+	i := newIncome(parsed, raw)
+	i.ID = id
+	// LinkedExpenseID stays nil here on purpose: UpdateIncome does not write that
+	// column, so the stored parent link survives the edit (ADR-0009).
+	if respondStoreErr(w, r, "updating income", id, s.store.UpdateIncome(r.Context(), i)) {
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleDelete removes a record, switching store method by the {kind} path
+// value, then redirects home (Post/Redirect/Get). Deleting a fronted expense
+// cascade-deletes its paybacks at the schema level (ADR-0009). An unknown id (or
+// kind) is a 404.
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	kind, ok := parseKind(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseID(w, r)
 	if !ok {
 		return
 	}
-	if respondStoreErr(w, r, "deleting expense", id, s.store.Delete(r.Context(), id)) {
+	op, del := "deleting expense", s.store.Delete
+	if kind == kindIncome {
+		op, del = "deleting income", s.store.DeleteIncome
+	}
+	if respondStoreErr(w, r, op, id, del(r.Context(), id)) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -455,6 +575,18 @@ func respondStoreErr(w http.ResponseWriter, r *http.Request, op string, id int64
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 	return true
+}
+
+// parseKind reads the {kind} path segment, accepting only "expense" or "income"
+// (ADR-0009) and writing a 404 for anything else, so an unknown kind never
+// reaches a store method.
+func parseKind(w http.ResponseWriter, r *http.Request) (string, bool) {
+	kind := r.PathValue("kind")
+	if kind != kindExpense && kind != kindIncome {
+		http.NotFound(w, r)
+		return "", false
+	}
+	return kind, true
 }
 
 // parseID reads the {id} path segment as a positive int64, writing a 404 and

@@ -25,12 +25,16 @@ type homeView struct {
 	// In edit mode it is pre-filled with the edited row's original raw_text.
 	Raw string
 	// FormAction is where the quick-add form posts: "/add" normally, or
-	// "/edit/{id}" while editing that row in place.
+	// "/edit/{kind}/{id}" while editing that row in place.
 	FormAction string
-	// Editing is true when the quick-add box is editing an existing expense
+	// Editing is true when the quick-add box is editing an existing record
 	// rather than adding a new one. It highlights the form, relabels the save
 	// control, and reveals the cancel affordance.
 	Editing bool
+	// Income is true when the record being edited is an income rather than an
+	// expense, so the edit-mode heading names the right kind (ADR-0009). It is
+	// meaningful only when Editing is true.
+	Income bool
 	// Preview is the live-preview fragment rendered inline for the current Raw,
 	// so a no-JS load (and a save-gate rejection) shows the same preview htmx
 	// would swap in. It is non-interactive here — the save control stays enabled
@@ -155,22 +159,22 @@ type dayGroup struct {
 // as "@personal" (AccountDefault true) rather than blank, so the default account
 // is visible and consistent everywhere.
 type rowView struct {
-	// ID is the stored record's identity, threaded through so an expense row's
-	// edit and delete controls can target its id-scoped endpoints. (Income rows
-	// are display-only in this slice; their kind-qualified controls arrive later.)
+	// ID is the stored record's identity, threaded through so the row's edit and
+	// delete controls can target its kind-qualified endpoints — /edit/income and
+	// /delete/income for a credit row, the expense twins otherwise (ADR-0009).
 	ID int64
 	// IsCredit marks a standalone income: it renders as a green "−€X.XX" credit
-	// row and, unlike an expense, carries no split marker or edit/delete controls
-	// and does not move the day total.
+	// row and, unlike an expense, carries no split marker and does not move the
+	// day total. It still exposes edit/delete controls (to its income endpoints).
 	IsCredit       bool
 	Amount         string // "€X.XX" for an expense; "−€X.XX" for a credit
 	Description    string
 	Account        string // "@work", or "@personal" when defaulted
 	AccountDefault bool
 	Split          bool
-	// Editable gates the row's Edit link: false for an expense too old to edit
+	// Editable gates the row's Edit link: false for a record too old to edit
 	// (its date a year old or older), so the list only offers edits that can't
-	// shift the date (ADR-0008). Always false for a credit row.
+	// shift the date (ADR-0008). Set for both expense and standalone-income rows.
 	Editable bool
 
 	// Net-cost fields (ADR-0009), set only on a fronted expense — one with at
@@ -205,11 +209,17 @@ type rowView struct {
 // "@personal" (AccountDefault true) when the payback named none, exactly like a
 // row.
 type paybackView struct {
+	// ID is the payback income's identity, so its edit/delete controls in the
+	// disclosure target the /edit/income and /delete/income endpoints (ADR-0009).
+	ID             int64
 	Amount         string // the credit magnitude as "−€X.XX"
 	Description    string
 	Account        string // "@bbva", or "@personal" when defaulted
 	AccountDefault bool
 	DateLabel      string // the payback's own date, e.g. "Thu 30 Jul"
+	// Editable gates the payback's Edit link by the same one-year cutoff as any
+	// other record (ADR-0008), on the payback's own date.
+	Editable bool
 }
 
 const (
@@ -278,11 +288,13 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 			for _, p := range pbs {
 				sum += p.Amount
 				views = append(views, paybackView{
+					ID:             p.ID,
 					Amount:         formatCredit(p.Amount),
 					Description:    p.Description,
 					Account:        accountLabel(p.Account),
 					AccountDefault: p.Account == nil,
 					DateLabel:      p.Date.Format(dayLabelLayout),
+					Editable:       expense.Editable(p.Date, now),
 				})
 			}
 			net := e.Amount - sum
@@ -314,6 +326,7 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 				Description:    i.Description,
 				Account:        accountLabel(i.Account),
 				AccountDefault: i.Account == nil,
+				Editable:       expense.Editable(i.Date, now),
 			},
 		})
 	}

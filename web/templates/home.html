@@ -28,8 +28,9 @@
           aria-label="Quick add"
         >
           <h2>
-            {{ if .Editing }}Edit expense{{ else if .Payback }}Quick add —
-            payback{{ else }}Quick add{{ end }}
+            {{ if .Editing }}Edit {{ if .Income }}income{{ else }}expense{{ end
+            }}{{ else if .Payback }}Quick add — payback{{ else }}Quick add{{ end
+            }}
           </h2>
           <form method="post" action="{{ .FormAction }}" autocomplete="off">
             {{ if .Payback }}
@@ -98,7 +99,7 @@
     </div>
     <div class="cell-acct">{{ template "account" . }}</div>
     <div class="cell-split"></div>
-    <div class="acts"></div>
+    {{ template "income-acts" . }}
   </div>
   {{ else }}
   <div class="row{{ if .HasPaybacks }} haspb{{ end }}">
@@ -124,6 +125,7 @@
             <span class="pb-desc">↩ {{ .Description }}</span>
             {{ template "account" . }}
             <span class="pb-date">· {{ .DateLabel }}</span>
+            {{ template "income-acts" . }}
           </div>
           {{ end }}
         </div>
@@ -147,12 +149,26 @@
 {{ end }} {{ end }} {{ end }} {{ define "expense-acts" }}
 <div class="acts">
   <a class="ghost addpb" href="/payback/{{ .ID }}">+ payback</a>
-  {{ if .Editable }}<a class="ghost" href="/edit/{{ .ID }}">edit</a>{{ end }}
+  {{ if .Editable }}<a class="ghost" href="/edit/expense/{{ .ID }}">edit</a>{{
+  end }}
   <form
     method="post"
-    action="/delete/{{ .ID }}"
+    action="/delete/expense/{{ .ID }}"
     hx-boost="true"
     hx-confirm="{{ if .HasPaybacks }}Delete this expense and its {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}? This can't be undone.{{ else }}Delete this expense? This can't be undone.{{ end }}"
+  >
+    <button class="ghost danger" type="submit">delete</button>
+  </form>
+</div>
+{{ end }} {{ define "income-acts" }}
+<div class="acts">
+  {{ if .Editable }}<a class="ghost" href="/edit/income/{{ .ID }}">edit</a>{{ end
+  }}
+  <form
+    method="post"
+    action="/delete/income/{{ .ID }}"
+    hx-boost="true"
+    hx-confirm="Delete this income? This can't be undone."
   >
     <button class="ghost danger" type="submit">delete</button>
   </form>

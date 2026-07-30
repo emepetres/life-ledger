@@ -46,19 +46,26 @@ func TestAddStandaloneIncomeRendersCreditWithoutMovingTotal(t *testing.T) {
 	}
 }
 
-// AC: an income row is display-only in this slice — no edit or delete controls
-// (its kind-qualified routes arrive later, ADR-0009).
-func TestStandaloneIncomeRowIsDisplayOnly(t *testing.T) {
+// AC: a standalone-income row exposes edit and delete controls wired to the
+// kind-qualified income routes (ADR-0009), and never to the expense routes.
+func TestStandaloneIncomeRowWiresKindQualifiedControls(t *testing.T) {
 	ts := newTestServer(t)
 	_, body := postAdd(t, ts, "+40 refund")
 
-	// The credit row carries neither an /edit link nor a /delete form. (Expense
-	// rows would; there are none here.)
-	if strings.Contains(body, "/edit/") {
-		t.Errorf("income row should offer no edit control; got:\n%s", body)
+	// The credit row's controls target the income endpoints.
+	if !strings.Contains(body, "/edit/income/") {
+		t.Errorf("income row should link an edit control to /edit/income/{id}; got:\n%s", body)
 	}
-	if strings.Contains(body, "/delete/") {
-		t.Errorf("income row should offer no delete control; got:\n%s", body)
+	if !strings.Contains(body, "/delete/income/") {
+		t.Errorf("income row should wire a delete control to /delete/income/{id}; got:\n%s", body)
+	}
+	// It is an income, not an expense: no expense-scoped controls on this row.
+	if strings.Contains(body, "/edit/expense/") || strings.Contains(body, "/delete/expense/") {
+		t.Errorf("a standalone income must not wire expense-scoped controls; got:\n%s", body)
+	}
+	// A standalone income is not a fronted expense, so it offers no "+ payback".
+	if strings.Contains(body, "/payback/") {
+		t.Errorf("a standalone income row should offer no + payback control; got:\n%s", body)
 	}
 }
 

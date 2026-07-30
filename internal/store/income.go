@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -62,6 +63,66 @@ func (s *Store) ListIncomes(ctx context.Context) ([]expense.Income, error) {
 		return nil, fmt.Errorf("listing incomes: %w", err)
 	}
 	return out, nil
+}
+
+// GetIncome returns the income with the given id, or ErrNotFound if none exists.
+// It mirrors Get for expenses (ADR-0009).
+func (s *Store) GetIncome(ctx context.Context, id int64) (expense.Income, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+incomeColumns+` FROM income WHERE id = ?`, id)
+	i, err := scanIncome(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return expense.Income{}, ErrNotFound
+	}
+	if err != nil {
+		return expense.Income{}, err
+	}
+	return i, nil
+}
+
+// UpdateIncome overwrites the mutable fields of the income identified by i.ID and
+// refreshes UpdatedAt to now, leaving its identity (ID, CreatedAt) untouched. It
+// deliberately does *not* write linked_expense_id: the parent link is never
+// re-parented on edit (ADR-0009), so the stored link is preserved regardless of
+// what i carries. It returns ErrNotFound if no row has that id. On success i's
+// UpdatedAt is set to the new instant.
+func (s *Store) UpdateIncome(ctx context.Context, i *expense.Income) error {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE income
+		 SET date = ?, amount = ?, description = ?, account = ?, raw_text = ?, updated_at = ?
+		 WHERE id = ?`,
+		i.Date.Format(dateLayout), i.Amount, i.Description,
+		accountArg(i.Account), i.RawText, now.Format(tsLayout), i.ID)
+	if err != nil {
+		return fmt.Errorf("updating income %d: %w", i.ID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("updating income %d: %w", i.ID, err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	i.UpdatedAt = now
+	return s.backupAfterWrite(ctx)
+}
+
+// DeleteIncome removes the income with the given id, returning ErrNotFound if
+// none exists. It targets the income table only; cascade-deleting an expense's
+// paybacks is the FK's job on Delete (ADR-0009), not this per-income delete.
+func (s *Store) DeleteIncome(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM income WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting income %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("deleting income %d: %w", id, err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return s.backupAfterWrite(ctx)
 }
 
 // scanIncome reads one row into an Income, translating SQLite's representation
