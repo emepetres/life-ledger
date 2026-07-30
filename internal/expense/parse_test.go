@@ -24,11 +24,12 @@ func TestParse(t *testing.T) {
 		raw         string
 		wantAmount  int
 		wantHasAmt  bool
-		wantDesc    string
-		wantAccount string
-		wantSplit   bool
-		wantDate    time.Time
-		wantErrs    []expense.ParseError
+		wantDesc     string
+		wantAccount  string
+		wantSplit    bool
+		wantIsIncome bool
+		wantDate     time.Time
+		wantErrs     []expense.ParseError
 	}{
 		{
 			name:       "amount with dot decimal and description",
@@ -188,6 +189,37 @@ func TestParse(t *testing.T) {
 			wantDesc: "", wantAccount: "work", wantDate: day(2026, 7, 21),
 			wantErrs: []expense.ParseError{expense.ErrNoAmount, expense.ErrEmptyDescription, expense.ErrTwoAccounts},
 		},
+		{
+			name:       "leading + before the first number marks an income",
+			raw:        "+30 Bob's share",
+			wantAmount: 3000, wantHasAmt: true, wantDesc: "Bob's share", wantIsIncome: true, wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "income with comma decimal, floating account and date offset",
+			raw:        "+12,50 x @bbva -2",
+			wantAmount: 1250, wantHasAmt: true, wantDesc: "x", wantAccount: "bbva", wantIsIncome: true, wantDate: day(2026, 7, 19),
+		},
+		{
+			name:       "star on an income is a save-gate violation",
+			raw:        "+30 lunch *",
+			wantAmount: 3000, wantHasAmt: true, wantDesc: "lunch", wantSplit: true, wantIsIncome: true, wantDate: day(2026, 7, 21),
+			wantErrs: []expense.ParseError{expense.ErrSplitOnIncome},
+		},
+		{
+			name:       "plus only marks the first bare number, not a later one",
+			raw:        "coffee +5 for 2",
+			wantAmount: 500, wantHasAmt: true, wantDesc: "coffee for 2", wantIsIncome: true, wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "plus on a non-first number stays in the description",
+			raw:        "10 lunch +5",
+			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch +5", wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "leading minus is a date offset even before a bare amount, not an income",
+			raw:        "-1 12 coffee",
+			wantAmount: 1200, wantHasAmt: true, wantDesc: "coffee", wantDate: day(2026, 7, 20),
+		},
 	}
 
 	for _, tt := range tests {
@@ -208,6 +240,9 @@ func TestParse(t *testing.T) {
 			}
 			if got.Split != tt.wantSplit {
 				t.Errorf("Split = %v, want %v", got.Split, tt.wantSplit)
+			}
+			if got.IsIncome != tt.wantIsIncome {
+				t.Errorf("IsIncome = %v, want %v", got.IsIncome, tt.wantIsIncome)
 			}
 			if !got.Date.Equal(tt.wantDate) {
 				t.Errorf("Date = %s, want %s", got.Date.Format("2006-01-02"), tt.wantDate.Format("2006-01-02"))

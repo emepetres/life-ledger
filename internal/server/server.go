@@ -404,20 +404,13 @@ func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // paid Amount is stored regardless of Split (ADR-0001); a blank account is left
 // nil so the store writes SQL NULL, and the verbatim line is retained as
 // RawText. The store fills in the identity and timestamps.
-func newExpense(p expense.ParsedExpense, raw string) *expense.Expense {
+func newExpense(p expense.ParsedEntry, raw string) *expense.Expense {
 	var account *string
 	if p.Account != "" {
 		a := p.Account
 		account = &a
 	}
-	return &expense.Expense{
-		Date:        p.Date,
-		Amount:      p.Amount,
-		Description: p.Description,
-		Split:       p.Split,
-		Account:     account,
-		RawText:     raw,
-	}
+	return expense.NewExpense(p.Date, p.Amount, p.Description, account, p.Split, raw)
 }
 
 // render executes the home template at the given status.

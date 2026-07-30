@@ -45,14 +45,7 @@ func newEditFixture(t *testing.T, raw string) (*httptest.Server, *store.Store, e
 		a := parsed.Account
 		account = &a
 	}
-	seed := &expense.Expense{
-		Date:        parsed.Date,
-		Amount:      parsed.Amount,
-		Description: parsed.Description,
-		Split:       parsed.Split,
-		Account:     account,
-		RawText:     raw,
-	}
+	seed := expense.NewExpense(parsed.Date, parsed.Amount, parsed.Description, account, parsed.Split, raw)
 	if err := st.Create(context.Background(), seed); err != nil {
 		t.Fatalf("seeding expense: %v", err)
 	}
@@ -280,13 +273,7 @@ func TestEditDoesNotShiftDateAfterTimePasses(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	parsed := expense.Parse("12 lunch -3", clk.now())
-	seed := &expense.Expense{
-		Date:        parsed.Date,
-		Amount:      parsed.Amount,
-		Description: parsed.Description,
-		Split:       parsed.Split,
-		RawText:     "12 lunch -3",
-	}
+	seed := expense.NewExpense(parsed.Date, parsed.Amount, parsed.Description, nil, parsed.Split, "12 lunch -3")
 	if err := st.Create(context.Background(), seed); err != nil {
 		t.Fatalf("seeding expense: %v", err)
 	}

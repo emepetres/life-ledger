@@ -78,7 +78,7 @@ type previewView struct {
 // submit still reaches the server-side save gate. editing relabels the save
 // control and reveals the cancel affordance, carried through so live swaps during
 // an edit keep the edit-mode chrome.
-func buildPreview(raw string, p expense.ParsedExpense, interactive, editing bool) previewView {
+func buildPreview(raw string, p expense.ParsedEntry, interactive, editing bool) previewView {
 	if strings.TrimSpace(raw) == "" {
 		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
 	}

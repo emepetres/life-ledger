@@ -115,7 +115,7 @@ sequenceDiagram
     B->>M: POST /preview (raw line)
     M->>H: session cookie valid → pass
     H->>P: Parse(raw, now)
-    P-->>H: ParsedExpense (+ save-gate result)
+    P-->>H: ParsedEntry (+ save-gate result)
     H-->>B: rendered preview fragment (200)
 
     Note over B,S: On submit — save

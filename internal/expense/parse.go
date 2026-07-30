@@ -1,9 +1,9 @@
 // Package expense holds the domain logic for the expense register. Its first
 // citizen is Parse, the single source of parse truth that turns a free-text
-// entry line into a ParsedExpense per ADR-0002. It is pure and I/O-free: the
-// same input plus the same injected "today" always yields the same result, so
-// the add, live-preview, and edit paths can all reuse it and be tested as a
-// black box.
+// entry line into a ParsedEntry per ADR-0002 (extended by ADR-0009). It is pure
+// and I/O-free: the same input plus the same injected "today" always yields the
+// same result, so the add, live-preview, and edit paths can all reuse it and be
+// tested as a black box.
 package expense
 
 import (
@@ -13,29 +13,33 @@ import (
 	"time"
 )
 
-// ParsedExpense is the resolved result of parsing one entry line. Amount is in
+// ParsedEntry is the resolved result of parsing one entry line — an expense or,
+// when the amount is prefixed with '+', an income (ADR-0009). Amount is in
 // integer minor units (cents) of the single implied currency, EUR (ADR-0001).
 // Date is always populated (today when the line names no date) and carries only
 // a calendar day — its clock fields are zero, in the injected today's location.
 // Account is the bare tag with its leading '@' stripped, empty when omitted.
-// Errors holds the save-gate violations, in a fixed order (see ParseError); an
-// empty slice means the line is safe to store.
-type ParsedExpense struct {
+// IsIncome flags the leading-'+' income sigil; the server branches on it to
+// build the right record. Errors holds the save-gate violations, in a fixed
+// order (see ParseError); an empty slice means the line is safe to store.
+type ParsedEntry struct {
 	Amount      int
 	HasAmount   bool
 	Description string
 	Account     string
 	Split       bool
+	IsIncome    bool
 	Date        time.Time
 	Errors      []ParseError
 }
 
 // OK reports whether the parse produced no save-gate errors, i.e. the entry can
 // be stored as-is.
-func (p ParsedExpense) OK() bool { return len(p.Errors) == 0 }
+func (p ParsedEntry) OK() bool { return len(p.Errors) == 0 }
 
-// ParseError enumerates the four save-gate violations from ADR-0002. Parsing is
-// otherwise lenient; these are the only conditions that block a save.
+// ParseError enumerates the save-gate violations from ADR-0002 (extended by
+// ADR-0009). Parsing is otherwise lenient; these are the only conditions that
+// block a save.
 type ParseError int
 
 const (
@@ -48,6 +52,9 @@ const (
 	ErrTwoDateTokens
 	// ErrTwoAccounts: more than one @account token was given.
 	ErrTwoAccounts
+	// ErrSplitOnIncome: a '*' split marker was given on an income (ADR-0009); an
+	// income can never be split.
+	ErrSplitOnIncome
 )
 
 // parseErrorText holds the terse message for each save-gate violation. The
@@ -57,6 +64,7 @@ var parseErrorText = map[ParseError]string{
 	ErrEmptyDescription: "empty description",
 	ErrTwoDateTokens:    "two date tokens",
 	ErrTwoAccounts:      "two @account tokens",
+	ErrSplitOnIncome:    "* not allowed on an income",
 }
 
 // Error implements the error interface so a ParseError can be surfaced directly.
@@ -72,6 +80,10 @@ var (
 	// ',' (12, 12.5, 12,50). No sign — a leading '-' is a date offset, never an
 	// amount — and no thousands separator (ADR-0002).
 	bareNumberRe = regexp.MustCompile(`^\d+(?:[.,]\d+)?$`)
+	// An income amount: a bare number with a leading '+' immediately before it,
+	// e.g. "+30", "+12,50" (ADR-0009). Group 1 is the bare number to parse; the
+	// '+' marks the whole entry as an income.
+	incomeNumberRe = regexp.MustCompile(`^\+(\d+(?:[.,]\d+)?)$`)
 	// Relative date: "-N" days before today.
 	relativeDateRe = regexp.MustCompile(`^-(\d+)$`)
 	// Absolute date "DD/MM", no leading zeros required.
@@ -80,21 +92,23 @@ var (
 	dayMonthYearRe = regexp.MustCompile(`^(\d{1,2})/(\d{1,2})/(\d{4})$`)
 )
 
-// Parse turns a raw entry line into a ParsedExpense, resolving dates relative to
+// Parse turns a raw entry line into a ParsedEntry, resolving dates relative to
 // the injected today so callers control "now" (and tests stay deterministic).
 //
-// Rules (ADR-0002): the amount is the first bare positive number, with '.'/','
-// as the decimal separator into minor units; a leading '-' is always a date
-// offset. The @account, standalone '*' split, and date token float in any order
-// after the amount; whatever text remains is the description. Extra bare numbers
-// stay in the description. An omitted date defaults to today. Save-gate errors
-// are collected for a missing amount, empty description, two date tokens, or two
-// @account tokens; everything else parses leniently.
-func Parse(raw string, today time.Time) ParsedExpense {
+// Rules (ADR-0002, extended by ADR-0009): the amount is the first bare positive
+// number, with '.'/',' as the decimal separator into minor units; a '+'
+// immediately before that first number marks the entry as an income and is
+// stripped, while a leading '-' is always a date offset. The @account,
+// standalone '*' split, and date token float in any order after the amount;
+// whatever text remains is the description. Extra bare numbers stay in the
+// description. An omitted date defaults to today. Save-gate errors are collected
+// for a missing amount, empty description, two date tokens, two @account tokens,
+// or a '*' on an income; everything else parses leniently.
+func Parse(raw string, today time.Time) ParsedEntry {
 	today = dateOnly(today)
 
 	var (
-		p          ParsedExpense
+		p          ParsedEntry
 		descTokens []string
 		dateTokens []string
 		accountN   int
@@ -110,6 +124,19 @@ func Parse(raw string, today time.Time) ParsedExpense {
 			if units := amountMinorUnits(tok); units > 0 {
 				p.Amount = units
 				p.HasAmount = true
+			} else {
+				descTokens = append(descTokens, tok)
+			}
+		case !p.HasAmount && incomeNumberRe.MatchString(tok):
+			// A '+' immediately before the first bare number marks an income
+			// (ADR-0009): strip it and parse the number as the amount. A
+			// non-positive value is left verbatim in the description like a bare
+			// zero, and the income marker is not set — there is no income amount.
+			num := incomeNumberRe.FindStringSubmatch(tok)[1]
+			if units := amountMinorUnits(num); units > 0 {
+				p.Amount = units
+				p.HasAmount = true
+				p.IsIncome = true
 			} else {
 				descTokens = append(descTokens, tok)
 			}
@@ -150,6 +177,9 @@ func Parse(raw string, today time.Time) ParsedExpense {
 	}
 	if accountN > 1 {
 		p.Errors = append(p.Errors, ErrTwoAccounts)
+	}
+	if p.IsIncome && p.Split {
+		p.Errors = append(p.Errors, ErrSplitOnIncome)
 	}
 
 	return p
