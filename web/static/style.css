@@ -24,6 +24,11 @@
   --radius: 12px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
   --sans: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  /* Shared by .row and .pb (a payback line), so a payback's amount/account
+     land in the same columns as its parent row — one definition, so the two
+     can't drift apart. */
+  --row-grid: 110px 1fr max-content 40px max-content;
+  --row-grid-narrow: auto 1fr auto;
 }
 
 * { box-sizing: border-box; }
@@ -122,7 +127,7 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .dayhead .tot { font-family: var(--mono); font-weight: 600; color: #94a1ad; }
 .row {
   display: grid;
-  grid-template-columns: 110px 1fr max-content 40px max-content;
+  grid-template-columns: var(--row-grid);
   align-items: center; gap: 12px;
   padding: 11px 6px; border-bottom: 1px solid #f2f3f5;
 }
@@ -201,7 +206,7 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 }
 .pb {
   display: grid;
-  grid-template-columns: 110px 1fr max-content 40px max-content;
+  grid-template-columns: var(--row-grid);
   align-items: center; gap: 12px;
   padding: 4px 6px; font-size: 13px; color: #334155;
 }
@@ -224,7 +229,7 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 @media (max-width: 640px) {
   .shell { grid-template-columns: 1fr; }
   .entry { top: 8px; }
-  .row, .pb { grid-template-columns: auto 1fr auto; column-gap: 12px; }
+  .row, .pb { grid-template-columns: var(--row-grid-narrow); column-gap: 12px; }
   .row { padding: 12px 4px; }
   .pb { padding: 6px 4px; }
   .row .amt { text-align: left; font-size: 16px; }

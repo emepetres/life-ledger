@@ -18,6 +18,11 @@
       aria-hidden="true"
       focusable="false"
     >
+      <!-- Presentation attributes (fill/stroke/...) are repeated per <symbol>
+           rather than set once on this wrapper: a <use> instance's shadow tree
+           inherits from the <use> element's own position in the page, not from
+           the hidden sprite's ancestor chain, so attributes set only here would
+           be dropped and each icon would render as a solid black shape. -->
       <symbol
         id="icon-payback"
         viewBox="0 0 24 24"
