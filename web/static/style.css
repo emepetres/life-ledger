@@ -144,6 +144,12 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
    in the .acts flex row beside the edit link. */
 .row .acts form { display: contents; }
 
+/* Row actions are icon-only (aria-label + title carry the accessible name); the
+   hover-reveal / always-visible-on-mobile behavior above is unchanged since it
+   still targets .acts as a whole. */
+.icon-btn { width: 30px; height: 30px; padding: 0; justify-content: center; }
+.icon-btn .icon { width: 16px; height: 16px; display: block; }
+
 .empty { color: var(--muted); padding: 16px; text-align: center; }
 
 /* ---- payback / net cost (ADR-0009) ---- */
@@ -164,11 +170,14 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .amt.stack .netbig.credit { color: var(--credit); }
 .amt.stack .paid { font-size: 11.5px; font-weight: 500; color: var(--muted); text-decoration: line-through; }
 
-/* The "−€X.XX from N paybacks" disclosure lives inside the description cell: its
-   summary is the clickable line, the drawer its expanded breakdown. Only
-   phrasing content sits in the summary (valid <details> nesting); the row's edit
-   / delete / + payback actions stay in .acts, outside the toggle. */
-.pb-disclosure { margin-top: 3px; }
+/* The "−€X.XX from N paybacks" disclosure is a full-width region spanning the
+   row (a 6th item in .row's grid, wrapping to its own auto row via
+   grid-column: 1/-1) rather than nested in the description cell — so the
+   parent's own description/account/split stay uncluttered whether the drawer
+   is open or closed. Only phrasing content sits in the summary (valid
+   <details> nesting); the row's edit / delete / + payback actions stay in
+   .acts, outside the toggle. */
+.pb-disclosure { grid-column: 1 / -1; margin-top: 3px; }
 .pb-disclosure > summary {
   list-style: none; cursor: pointer;
   font-size: 12px; color: var(--muted);
@@ -178,31 +187,49 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .pb-disclosure[open] > summary::after { content: " ▴"; }
 .pbsum .in { color: var(--credit); font-weight: 600; }
 
-/* The expanded breakdown: one indented credit line per payback. */
-.pb-drawer { padding: 4px 0 2px 14px; }
-.pb { display: flex; gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; color: #334155; }
+/* The expanded breakdown: each payback is its own grid row using the exact
+   same column template as .row (110px amount / 1fr description / max-content
+   account / 40px split-spacer / max-content actions), starting at the same
+   left edge as .row's own cells — so payback amounts and accounts land in the
+   same columns as the parent expense and standalone-income rows. A left accent
+   (painted via box-shadow, so it costs no layout space and can't shift the
+   columns) sets the block off as subordinate to its parent. */
+.pb-drawer {
+  padding-top: 4px; margin-top: 2px;
+  border-top: 1px dashed var(--line);
+  box-shadow: inset 3px 0 0 0 var(--line);
+}
+.pb {
+  display: grid;
+  grid-template-columns: 110px 1fr max-content 40px max-content;
+  align-items: center; gap: 12px;
+  padding: 4px 6px; font-size: 13px; color: #334155;
+}
 .pb .pa {
   font-family: var(--mono); color: var(--credit); font-weight: 700;
-  min-width: 74px; text-align: right; font-variant-numeric: tabular-nums;
+  text-align: right; font-variant-numeric: tabular-nums;
 }
-.pb .pb-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pb .pb-date { color: var(--muted); }
-.acts .addpb { font-size: 11.5px; }
+.pb-body { min-width: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.pb-body .pb-desc { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-body .pb-date { flex: none; color: var(--muted); }
+.pb-split { text-align: center; }
 
 @media (max-width: 640px) {
   /* On the narrow row grid (auto 1fr auto), the net headline aligns left like
      the plain amount does. */
   .amt.stack { align-items: flex-start; }
-  .pb-drawer { padding-left: 12px; }
 }
 
 /* ---- narrow: rail collapses, rows restack (no literal cards) ---- */
 @media (max-width: 640px) {
   .shell { grid-template-columns: 1fr; }
   .entry { top: 8px; }
-  .row { grid-template-columns: auto 1fr auto; column-gap: 12px; padding: 12px 4px; }
+  .row, .pb { grid-template-columns: auto 1fr auto; column-gap: 12px; }
+  .row { padding: 12px 4px; }
+  .pb { padding: 6px 4px; }
   .row .amt { text-align: left; font-size: 16px; }
-  .cell-acct, .cell-split { display: none; } /* folded into the meta line */
+  .cell-acct, .cell-split, .pb-acct, .pb-split { display: none; } /* folded into the meta line */
   .meta-m { display: flex; }
+  .pb-body .meta-m { flex-basis: 100%; } /* account chip drops to its own line */
   .row .acts { opacity: 1; } /* no hover on touch */
 }

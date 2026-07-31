@@ -10,6 +10,55 @@
     <script src="{{ .HTMXSrc }}" defer></script>
   </head>
   <body>
+    <!-- Icon sprite: inline, vendored (no CDN) — reused by the row actions and
+         the payback drawer's own edit/delete controls. Hidden but reachable via
+         <use>, per the standard accessible-sprite pattern. -->
+    <svg
+      style="position: absolute; width: 0; height: 0; overflow: hidden"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <symbol
+        id="icon-payback"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <polyline points="9 10 4 15 9 20"></polyline>
+        <path d="M20 4v7a4 4 0 0 1-4 4H4"></path>
+      </symbol>
+      <symbol
+        id="icon-edit"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+      </symbol>
+      <symbol
+        id="icon-delete"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path
+          d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3-3h8a1 1 0 0 1 1 1v2H7V4a1 1 0 0 1 1-1z"
+        ></path>
+        <line x1="10" y1="11" x2="10" y2="17"></line>
+        <line x1="14" y1="11" x2="14" y2="17"></line>
+      </symbol>
+    </svg>
+
     <header class="app-header">
       <div class="logo">£</div>
       <div>
@@ -113,24 +162,6 @@
     {{ end }}
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
-      {{ if .HasPaybacks }}
-      <details class="pb-disclosure">
-        <summary class="pbsum">
-          <span class="in">{{ .PaybackSum }}</span> from {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}
-        </summary>
-        <div class="pb-drawer">
-          {{ range .Paybacks }}
-          <div class="pb">
-            <span class="pa">{{ .Amount }}</span>
-            <span class="pb-desc">↩ {{ .Description }}</span>
-            {{ template "account" . }}
-            <span class="pb-date">· {{ .DateLabel }}</span>
-            {{ template "income-acts" . }}
-          </div>
-          {{ end }}
-        </div>
-      </details>
-      {{ end }}
       <div class="meta-m">
         {{ template "account" . }} {{ if .Split }}<span class="chip split"
           >½ split</span
@@ -141,36 +172,89 @@
     <div class="cell-split">
       {{ if .Split }}<span class="badge split">½</span>{{ end }}
     </div>
-    {{ template "expense-acts" . }}
+    {{ template "expense-acts" . }} {{ if .HasPaybacks }}
+    <details class="pb-disclosure">
+      <summary class="pbsum">
+        <span class="in">{{ .PaybackSum }}</span> from {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}
+      </summary>
+      <div class="pb-drawer">
+        {{ range .Paybacks }}
+        <div class="pb">
+          <span class="pa">{{ .Amount }}</span>
+          <div class="pb-body">
+            <span class="pb-desc">↩ {{ .Description }}</span>
+            <span class="pb-date">· {{ .DateLabel }}</span>
+            <div class="meta-m">{{ template "account" . }}</div>
+          </div>
+          <div class="pb-acct">{{ template "account" . }}</div>
+          <div class="pb-split"></div>
+          {{ template "income-acts" . }}
+        </div>
+        {{ end }}
+      </div>
+    </details>
+    {{ end }}
   </div>
   {{ end }}
   {{ end }}
 </div>
 {{ end }} {{ end }} {{ end }} {{ define "expense-acts" }}
 <div class="acts">
-  <a class="ghost addpb" href="/payback/{{ .ID }}">+ payback</a>
-  {{ if .Editable }}<a class="ghost" href="/edit/expense/{{ .ID }}">edit</a>{{
-  end }}
+  <a
+    class="ghost icon-btn addpb"
+    href="/payback/{{ .ID }}"
+    aria-label="Add payback"
+    title="Add payback"
+    ><svg class="icon" aria-hidden="true"><use href="#icon-payback"></use></svg
+  ></a>
+  {{ if .Editable }}<a
+    class="ghost icon-btn"
+    href="/edit/expense/{{ .ID }}"
+    aria-label="Edit"
+    title="Edit"
+    ><svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg
+  ></a>
+  {{ end }}
   <form
     method="post"
     action="/delete/expense/{{ .ID }}"
     hx-boost="true"
     hx-confirm="{{ if .HasPaybacks }}Delete this expense and its {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}? This can't be undone.{{ else }}Delete this expense? This can't be undone.{{ end }}"
   >
-    <button class="ghost danger" type="submit">delete</button>
+    <button
+      class="ghost icon-btn danger"
+      type="submit"
+      aria-label="Delete"
+      title="Delete"
+    >
+      <svg class="icon" aria-hidden="true"><use href="#icon-delete"></use></svg>
+    </button>
   </form>
 </div>
 {{ end }} {{ define "income-acts" }}
 <div class="acts">
-  {{ if .Editable }}<a class="ghost" href="/edit/income/{{ .ID }}">edit</a>{{ end
-  }}
+  {{ if .Editable }}<a
+    class="ghost icon-btn"
+    href="/edit/income/{{ .ID }}"
+    aria-label="Edit"
+    title="Edit"
+    ><svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg
+  ></a>
+  {{ end }}
   <form
     method="post"
     action="/delete/income/{{ .ID }}"
     hx-boost="true"
     hx-confirm="Delete this income? This can't be undone."
   >
-    <button class="ghost danger" type="submit">delete</button>
+    <button
+      class="ghost icon-btn danger"
+      type="submit"
+      aria-label="Delete"
+      title="Delete"
+    >
+      <svg class="icon" aria-hidden="true"><use href="#icon-delete"></use></svg>
+    </button>
   </form>
 </div>
 {{ end }} {{ define "account" }} {{ if .AccountDefault
