@@ -238,7 +238,11 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	// keeps the "Save changes" label and cancel affordance instead of reverting
 	// to the add-mode "Add" control on every keystroke.
 	editing := r.PostFormValue("edit") != ""
-	parsed := expense.Parse(raw, s.now())
+	// The hidden linked_expense_id, when present, rides along automatically:
+	// htmx includes every named field of the input's closest form in the
+	// request, and that hidden field lives in the same form as the quick-add
+	// input (ADR-0009 amendment, #62).
+	parsed := expense.Parse(raw, s.now()).GatePayback(linkedExpenseID(r) != nil)
 	s.renderPartial(w, "preview", buildPreview(raw, parsed, true, editing))
 }
 
@@ -290,7 +294,10 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	parsed := expense.Parse(v.Raw, s.now())
+	// v.Payback carries whether this render's box is in payback mode (ADR-0009
+	// amendment, #62); the gate is reapplied here so the inline preview matches
+	// what /preview would show for the same state.
+	parsed := expense.Parse(v.Raw, s.now()).GatePayback(v.Payback)
 	v.HTMXSrc = s.htmxSrc
 	v.Preview = buildPreview(v.Raw, parsed, false, v.Editing)
 	v.Groups = groupByDay(expenses, incomes, s.now())
@@ -309,22 +316,26 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw := r.PostFormValue("raw")
+	// A hidden linked_expense_id — present only when the box was opened via a
+	// row's "+ payback" — links the saved income to its parent out-of-band,
+	// making it a payback; absent, it stores as a standalone income with a nil
+	// link. Read once so the gate check and the eventual save agree.
+	linkedID := linkedExpenseID(r)
 
-	parsed := expense.Parse(raw, s.now())
+	// A '+' line is an income (ADR-0009). The '*'-on-income case never reaches
+	// the store because the save gate above rejects it (ErrSplitOnIncome); a
+	// payback link on a non-income line is rejected the same way
+	// (ErrPaybackNotIncome, ADR-0009 amendment #62) — a payback can't silently
+	// fall through and save as an unlinked expense.
+	parsed := expense.Parse(raw, s.now()).GatePayback(linkedID != nil)
 	if !parsed.OK() {
-		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
+		s.renderAddRejected(w, r, raw, linkedID)
 		return
 	}
 
-	// A '+' line is an income (ADR-0009). A hidden linked_expense_id — present
-	// only when the box was opened via a row's "+ payback" — links it to its
-	// parent out-of-band, making it a payback; absent, it stores as a standalone
-	// income with a nil link. The link is read only for an income and never from
-	// the entry text. The '*'-on-income case never reaches here because the save
-	// gate above rejects it (ErrSplitOnIncome).
 	if parsed.IsIncome {
 		income := newIncome(parsed, raw)
-		income.LinkedExpenseID = linkedExpenseID(r)
+		income.LinkedExpenseID = linkedID
 		if err := s.store.CreateIncome(r.Context(), income); err != nil {
 			log.Printf("creating income: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -341,6 +352,33 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// renderAddRejected re-renders the quick-add box after a server-side save-gate
+// refusal on /add, at 422. When the rejected submission carried a payback link,
+// it reloads the parent so the payback banner and hidden linked_expense_id
+// survive the re-render — otherwise the box would silently drop back to plain
+// add mode and the user's next submit would save an unlinked entry instead of
+// fixing the payback (ADR-0009 amendment, #62). A parent that no longer exists
+// degrades to a plain rejection rather than a 500: the link is already gone, so
+// there is nothing left to re-show.
+func (s *Server) renderAddRejected(w http.ResponseWriter, r *http.Request, raw string, linkedID *int64) {
+	if linkedID == nil {
+		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
+		return
+	}
+	parent, err := s.store.Get(r.Context(), *linkedID)
+	if err != nil {
+		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
+		return
+	}
+	s.renderHome(w, r, http.StatusUnprocessableEntity, homeView{
+		Raw:               raw,
+		FormAction:        addAction,
+		Payback:           true,
+		LinkedExpenseID:   *linkedID,
+		LinkedExpenseDesc: parent.Description,
+	})
 }
 
 // addAction is the quick-add form's action in add mode; edit mode swaps in an
@@ -681,6 +719,7 @@ var saveGateMessages = map[expense.ParseError]string{
 	expense.ErrTwoDateTokens:    "two dates",
 	expense.ErrTwoAccounts:      "two @accounts",
 	expense.ErrSplitOnIncome:    "cannot split an income",
+	expense.ErrPaybackNotIncome: "a payback must keep its + amount",
 }
 
 // errorMessages maps the parser's save-gate violations to the user-facing

@@ -142,3 +142,81 @@ func TestAddPaybackOverRepaidGreenNetStoredAmountUnchanged(t *testing.T) {
 		t.Errorf("stored paid amount must stay €50.00 (net is display-only); got:\n%s", body)
 	}
 }
+
+// AC (#62): while a payback link is active, the live preview refuses a
+// non-income line — a payback must keep its leading '+' — surfacing the new
+// gate message and disabling Save, mirroring the existing '*'-on-income gate.
+func TestPreviewPaybackGateBlocksNonIncome(t *testing.T) {
+	ts := newTestServer(t)
+
+	_, body := postForm(t, ts, "/preview", url.Values{
+		"raw":               {"30 lunch"},
+		"linked_expense_id": {"1"},
+	})
+	if !strings.Contains(body, "a payback must keep its") {
+		t.Errorf("payback preview without '+' should surface the gate message; got:\n%s", body)
+	}
+	if !strings.Contains(body, "disabled") {
+		t.Errorf("payback preview without '+' should disable Save; got:\n%s", body)
+	}
+}
+
+// AC (#62): a valid '+…' line in payback mode is unaffected by the new gate —
+// no error, Save stays enabled.
+func TestPreviewPaybackGateAllowsIncome(t *testing.T) {
+	ts := newTestServer(t)
+
+	_, body := postForm(t, ts, "/preview", url.Values{
+		"raw":               {"+30 Bob share"},
+		"linked_expense_id": {"1"},
+	})
+	if strings.Contains(body, "a payback must keep its") {
+		t.Errorf("a valid payback line should not surface the gate message; got:\n%s", body)
+	}
+	if strings.Contains(body, "disabled") {
+		t.Errorf("a valid payback line should leave Save enabled; got:\n%s", body)
+	}
+}
+
+// AC (#62): with no active link, a plain expense line is unaffected by the new
+// gate — no regression for the standalone case.
+func TestPreviewWithoutLinkUnaffectedByPaybackGate(t *testing.T) {
+	ts := newTestServer(t)
+
+	_, body := postForm(t, ts, "/preview", url.Values{"raw": {"30 lunch"}})
+	if strings.Contains(body, "a payback must keep its") {
+		t.Errorf("a standalone expense should never surface the payback gate message; got:\n%s", body)
+	}
+}
+
+// AC (#62): posting to /add with an active payback link but a non-income line
+// is refused server-side (verifiable without JS) — storing nothing — and the
+// payback banner/hidden link survive the re-render so the user doesn't lose
+// context and silently detach from the parent on their next submit.
+func TestAddPaybackGateRejectsNonIncome(t *testing.T) {
+	ts := newTestServer(t)
+	_, added := postAdd(t, ts, "90 team lunch @amex")
+	id := paybackParentID(t, added)
+
+	resp, body := postForm(t, ts, "/add", url.Values{
+		"raw":               {"30 lunch"},
+		"linked_expense_id": {strconv.FormatInt(id, 10)},
+	})
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("POST /add status = %d, want 422", resp.StatusCode)
+	}
+	if !strings.Contains(body, "a payback must keep its") {
+		t.Errorf("rejection should surface the payback gate message; got:\n%s", body)
+	}
+	// The payback link survives the rejection so the box stays in payback mode.
+	if !strings.Contains(body, `name="linked_expense_id"`) {
+		t.Errorf("rejected payback should keep the hidden linked_expense_id; got:\n%s", body)
+	}
+	if !strings.Contains(body, `value="`+strconv.FormatInt(id, 10)+`"`) {
+		t.Errorf("rejected payback should keep the parent's id %d; got:\n%s", id, body)
+	}
+	// Nothing stored: the parent still shows no paybacks.
+	if strings.Contains(body, "from 1 payback") {
+		t.Errorf("a rejected payback must persist nothing; got:\n%s", body)
+	}
+}

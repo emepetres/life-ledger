@@ -37,6 +37,19 @@ type ParsedEntry struct {
 // be stored as-is.
 func (p ParsedEntry) OK() bool { return len(p.Errors) == 0 }
 
+// GatePayback appends ErrPaybackNotIncome when linked is true (a payback link
+// is active) but the entry does not parse as an income (ADR-0009 amendment,
+// #62): a payback must keep its leading '+' amount. Parse itself never sees the
+// link — it is set out-of-band by the "+ payback" action and read from a hidden
+// form field, never from the entry text — so a caller holding that context
+// calls GatePayback after Parse returns, before checking OK().
+func (p ParsedEntry) GatePayback(linked bool) ParsedEntry {
+	if linked && !p.IsIncome {
+		p.Errors = append(p.Errors, ErrPaybackNotIncome)
+	}
+	return p
+}
+
 // ParseError enumerates the save-gate violations from ADR-0002 (extended by
 // ADR-0009). Parsing is otherwise lenient; these are the only conditions that
 // block a save.
@@ -55,6 +68,11 @@ const (
 	// ErrSplitOnIncome: a '*' split marker was given on an income (ADR-0009); an
 	// income can never be split.
 	ErrSplitOnIncome
+	// ErrPaybackNotIncome: a payback link is active but the line does not parse
+	// as an income (ADR-0009 amendment, #62); a payback must keep its leading
+	// '+' amount. Never set by Parse itself — the link is out-of-band and Parse
+	// never sees it (see GatePayback).
+	ErrPaybackNotIncome
 )
 
 // parseErrorText holds the terse message for each save-gate violation. The
@@ -65,6 +83,7 @@ var parseErrorText = map[ParseError]string{
 	ErrTwoDateTokens:    "two date tokens",
 	ErrTwoAccounts:      "two @account tokens",
 	ErrSplitOnIncome:    "* not allowed on an income",
+	ErrPaybackNotIncome: "payback must keep its + amount",
 }
 
 // Error implements the error interface so a ParseError can be surfaced directly.

@@ -121,6 +121,21 @@
               end
               }}
             />
+            <!-- Caret-to-end: when the box loads pre-filled (payback start's
+                 leading '+', or the edit flow's canonical line, ADR-0009/#62),
+                 the caret otherwise lands at the start, forcing the user to
+                 move it before typing. No dependency needed — this is the only
+                 place that needs it, and there is no CSP to work around. -->
+            <script>
+              (function () {
+                var input = document.querySelector(".qa-input");
+                if (input && input.value) {
+                  var end = input.value.length;
+                  input.focus();
+                  input.setSelectionRange(end, end);
+                }
+              })();
+            </script>
             <div id="preview">{{ template "preview" .Preview }}</div>
           </form>
           <p class="hint">

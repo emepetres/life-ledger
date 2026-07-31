@@ -284,3 +284,76 @@ func TestParseIsPure(t *testing.T) {
 		t.Errorf("Parse mutated injected today: %s != %s", today, before)
 	}
 }
+
+// TestGatePayback pins the ADR-0009 amendment (#62): a payback link is
+// out-of-band context Parse never sees, so callers apply the gate after Parse
+// returns. It must refuse a non-income line only when a link is active, and
+// never touch an unrelated, already-present error.
+func TestGatePayback(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		linked   bool
+		wantErrs []expense.ParseError
+	}{
+		{
+			name:     "linked and income: no gate error",
+			raw:      "+30 Bob share",
+			linked:   true,
+			wantErrs: nil,
+		},
+		{
+			name:     "linked and not income: gated",
+			raw:      "30 lunch",
+			linked:   true,
+			wantErrs: []expense.ParseError{expense.ErrPaybackNotIncome},
+		},
+		{
+			name:     "not linked and not income: untouched",
+			raw:      "30 lunch",
+			linked:   false,
+			wantErrs: nil,
+		},
+		{
+			name:     "not linked and income: untouched",
+			raw:      "+30 Bob share",
+			linked:   false,
+			wantErrs: nil,
+		},
+		{
+			name:     "linked and not income, on top of an existing error",
+			raw:      "lunch",
+			linked:   true,
+			wantErrs: []expense.ParseError{expense.ErrNoAmount, expense.ErrPaybackNotIncome},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := expense.Parse(tt.raw, today).GatePayback(tt.linked)
+			if !reflect.DeepEqual(got.Errors, tt.wantErrs) {
+				t.Errorf("Errors = %v, want %v", got.Errors, tt.wantErrs)
+			}
+			if wantOK := len(tt.wantErrs) == 0; got.OK() != wantOK {
+				t.Errorf("OK() = %v, want %v", got.OK(), wantOK)
+			}
+		})
+	}
+}
+
+// TestGatePaybackIsPure verifies GatePayback leaves the original ParsedEntry it
+// was called on unmodified — it returns a gated copy rather than mutating the
+// receiver, so a caller that still holds the original sees no gate error added
+// behind its back.
+func TestGatePaybackIsPure(t *testing.T) {
+	original := expense.Parse("30 lunch", today)
+
+	gated := original.GatePayback(true)
+
+	if !original.OK() {
+		t.Errorf("GatePayback mutated the original ParsedEntry: Errors = %v, want none", original.Errors)
+	}
+	if gated.OK() {
+		t.Errorf("gated copy should carry ErrPaybackNotIncome, got OK()=true")
+	}
+}
