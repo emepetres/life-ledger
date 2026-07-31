@@ -26,9 +26,10 @@ func mkIncome(id int64, date, created time.Time, amount int, desc string, link *
 }
 
 // AC: a standalone income interleaves by its own date into the day groups and
-// renders as a credit row, and the day total is the sum of expenses only — the
-// income does not move it (ADR-0009).
-func TestGroupByDayInterleavesCreditWithoutMovingTotal(t *testing.T) {
+// renders as a blue income row with no leading '−', and the day total is the
+// sum of expenses only — the income does not move it (ADR-0009 amendment,
+// #59/#63).
+func TestGroupByDayInterleavesIncomeWithoutMovingTotal(t *testing.T) {
 	day := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 
@@ -57,26 +58,28 @@ func TestGroupByDayInterleavesCreditWithoutMovingTotal(t *testing.T) {
 	if g.Total != "€30.00" {
 		t.Errorf("day total = %q, want €30.00 (expenses only)", g.Total)
 	}
-	// Interleaved newest-first by created_at: the credit came last, so it heads
+	// Interleaved newest-first by created_at: the income came last, so it heads
 	// the day.
-	if !g.Rows[0].IsCredit {
-		t.Errorf("row 0 IsCredit = false, want the most-recent income first")
+	if !g.Rows[0].IsIncome {
+		t.Errorf("row 0 IsIncome = false, want the most-recent income first")
 	}
-	if g.Rows[0].Amount != "−€40.00" {
-		t.Errorf("credit amount = %q, want −€40.00", g.Rows[0].Amount)
+	// No leading '−': a standalone income renders blue, not the payback/net
+	// credit green (ADR-0009 amendment, #59/#63).
+	if g.Rows[0].Amount != "€40.00" {
+		t.Errorf("standalone income amount = %q, want €40.00 (no leading −)", g.Rows[0].Amount)
 	}
 	// A recent standalone income is editable, gated by the same one-year cutoff as
 	// an expense (ADR-0008); its row carries the id so its kind-qualified controls
 	// can target /edit/income and /delete/income (ADR-0009).
 	if !g.Rows[0].Editable {
-		t.Errorf("recent credit row Editable = false, want true (within the edit cutoff)")
+		t.Errorf("recent income row Editable = false, want true (within the edit cutoff)")
 	}
 	if g.Rows[0].ID != 1 {
-		t.Errorf("credit row ID = %d, want 1 (threaded through for its controls)", g.Rows[0].ID)
+		t.Errorf("income row ID = %d, want 1 (threaded through for its controls)", g.Rows[0].ID)
 	}
 	for _, r := range g.Rows[1:] {
-		if r.IsCredit {
-			t.Errorf("expense row marked IsCredit; got %+v", r)
+		if r.IsIncome {
+			t.Errorf("expense row marked IsIncome; got %+v", r)
 		}
 	}
 }
@@ -101,19 +104,19 @@ func TestGroupByDayAttachesPaybackAndNetsTotal(t *testing.T) {
 	}
 	g := groups[0]
 	// The payback is not a standalone row: only the expense and the standalone
-	// credit are feed rows.
+	// income are feed rows.
 	if len(g.Rows) != 2 {
-		t.Fatalf("rows = %d, want 2 (expense + standalone credit; payback attached)", len(g.Rows))
+		t.Fatalf("rows = %d, want 2 (expense + standalone income; payback attached)", len(g.Rows))
 	}
 	for _, r := range g.Rows {
-		if r.IsCredit && r.Description == "Bob's share" {
+		if r.IsIncome && r.Description == "Bob's share" {
 			t.Errorf("linked payback rendered as a standalone row; got %+v", r)
 		}
 	}
 	// The expense row carries its payback and derived net cost (6000 − 2000).
 	var expenseRow rowView
 	for _, r := range g.Rows {
-		if !r.IsCredit {
+		if !r.IsIncome {
 			expenseRow = r
 		}
 	}

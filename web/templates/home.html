@@ -159,8 +159,8 @@
     <span>{{ .Label }}</span><span class="tot">{{ .Total }}</span>
   </div>
   {{ range .Rows }}
-  {{ if .IsCredit }}
-  <div class="row credit">
+  {{ if .IsIncome }}
+  <div class="row income">
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
@@ -286,7 +286,7 @@
   {{ if .Empty }}
   <span class="chip muted">live preview…</span>
   {{ else }} {{ if .HasAmount }}<span
-    class="chip amount{{ if .IsCredit }} credit{{ end }}"
+    class="chip amount{{ if .IsPayback }} credit{{ else if .IsIncome }} income{{ end }}"
     >{{ .Amount }}</span
   >{{ end }}
   <span class="chip date">{{ .DateLabel }}</span>

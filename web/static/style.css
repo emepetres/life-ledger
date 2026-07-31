@@ -16,6 +16,8 @@
   --amount: #14532d;
   --credit: #047857;
   --credit-soft: #d1fae5;
+  --income: #1d4ed8;
+  --income-soft: #dbeafe;
   --split: #b45309;
   --split-soft: #fdf0dd;
   --acct: #3730a3;
@@ -101,8 +103,13 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   margin-top: 10px; min-height: 26px;
 }
 .chip.amount { background: var(--accent-soft); color: var(--amount); font-weight: 700; font-variant-numeric: tabular-nums; }
-/* Income preview: a green credit chip so a '+' line reads as money in (ADR-0009). */
+/* Payback preview (an active payback link): a green credit chip so a '+' line
+   reads as money in against its parent (ADR-0009). */
 .chip.amount.credit { background: var(--credit-soft); color: var(--credit); }
+/* Standalone-income preview (no active link): blue, no leading '−' — distinct
+   from a payback, which nets against nothing on screen (ADR-0009 amendment,
+   #59/#63). */
+.chip.amount.income { background: var(--income-soft); color: var(--income); }
 .chip.date { background: #eef2f7; color: #334155; }
 .chip.desc { background: transparent; color: var(--ink); padding-left: 0; font-weight: 600; }
 .chip.muted { background: none; color: var(--muted); }
@@ -136,9 +143,10 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   font-family: var(--mono); font-weight: 700; color: var(--amount);
   text-align: right; font-variant-numeric: tabular-nums;
 }
-/* A standalone income renders as a green credit row — the "−€X.XX" amount in a
-   distinct credit green so money in reads apart from an expense (ADR-0009). */
-.row.credit .amt { color: var(--credit); }
+/* A standalone income renders blue with no leading '−' — distinct from a
+   payback or an over-repaid net, which stay credit green (ADR-0009 amendment,
+   #59/#63). */
+.row.income .amt { color: var(--income); }
 .desc-cell { min-width: 0; }
 .desc-cell .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .meta-m { display: none; gap: 6px; margin-top: 4px; align-items: center; } /* mobile-only */
@@ -158,8 +166,7 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .empty { color: var(--muted); padding: 16px; text-align: center; }
 
 /* ---- payback / net cost (ADR-0009) ---- */
-/* The out-of-band payback link chip in the quick-add box, plus the standalone
-   "income" tag on a credit row. */
+/* The out-of-band payback link chip in the quick-add box. */
 .chip.link { background: var(--split-soft); color: var(--split); font-weight: 600; }
 .payback-banner {
   display: flex; align-items: center; gap: 8px;

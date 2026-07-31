@@ -115,10 +115,10 @@ func TestAddPaybackNetsParentAndShowsBreakdown(t *testing.T) {
 			t.Errorf("breakdown missing %q; got:\n%s", want, body)
 		}
 	}
-	// It is not a standalone credit row: a payback is nested under its parent, not
+	// It is not a standalone income row: a payback is nested under its parent, not
 	// interleaved into the feed.
-	if strings.Contains(body, `class="row credit"`) {
-		t.Errorf("payback must not render as a standalone credit row; got:\n%s", body)
+	if strings.Contains(body, `class="row income"`) {
+		t.Errorf("payback must not render as a standalone income row; got:\n%s", body)
 	}
 }
 
@@ -175,6 +175,27 @@ func TestPreviewPaybackGateAllowsIncome(t *testing.T) {
 	}
 	if strings.Contains(body, "disabled") {
 		t.Errorf("a valid payback line should leave Save enabled; got:\n%s", body)
+	}
+}
+
+// AC (#59/#63): a "+…" line typed while a payback link is active previews as a
+// payback — green with the leading '−' — not as a standalone income, since the
+// preview colours by link state.
+func TestPreviewPaybackModeShowsGreenCreditChip(t *testing.T) {
+	ts := newTestServer(t)
+
+	_, body := postForm(t, ts, "/preview", url.Values{
+		"raw":               {"+30 Bob share"},
+		"linked_expense_id": {"1"},
+	})
+	if !strings.Contains(body, "−€30.00") {
+		t.Errorf("payback-mode preview should show the green −€30.00 credit chip; got:\n%s", body)
+	}
+	if !strings.Contains(body, "chip amount credit") {
+		t.Errorf("payback-mode preview amount chip should carry the credit class; got:\n%s", body)
+	}
+	if strings.Contains(body, "chip amount income") {
+		t.Errorf("payback-mode preview must not carry the standalone-income class; got:\n%s", body)
 	}
 }
 

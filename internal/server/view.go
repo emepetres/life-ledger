@@ -62,13 +62,19 @@ type homeView struct {
 type previewView struct {
 	// Empty is true for a blank entry, shown as an unobtrusive placeholder.
 	Empty bool
-	// HasAmount gates the amount chip; Amount is "€X.XX" for an expense and the
-	// green credit "−€X.XX" for an income (IsCredit).
+	// HasAmount gates the amount chip; Amount is "€X.XX" for an expense, a plain
+	// "€X.XX" styled blue for a standalone income (IsIncome), or the green
+	// credit "−€X.XX" for a payback (IsPayback).
 	HasAmount bool
 	Amount    string
-	// IsCredit marks a '+' income line so the amount chip renders green as a
-	// credit that subtracts (ADR-0009); an income never shows a split badge.
-	IsCredit bool
+	// IsIncome marks any '+' line, standalone or payback; an income never shows
+	// a split badge regardless of link state (ADR-0009).
+	IsIncome bool
+	// IsPayback marks a '+' line typed while a payback link is active: the
+	// preview colours by link state — a payback stays green with the credit
+	// '−', while a standalone income (IsIncome but not IsPayback) previews blue
+	// with no '−' (ADR-0009 amendment, #59/#63).
+	IsPayback bool
 	// DateLabel is the resolved date as a real date, e.g. "Fri 17 Jul" — never
 	// a "-N" offset or a raw token.
 	DateLabel string
@@ -97,15 +103,20 @@ type previewView struct {
 // or invalid entry; on the inline home render it is left enabled so a no-JS
 // submit still reaches the server-side save gate. editing relabels the save
 // control and reveals the cancel affordance, carried through so live swaps during
-// an edit keep the edit-mode chrome.
-func buildPreview(raw string, p expense.ParsedEntry, interactive, editing bool) previewView {
+// an edit keep the edit-mode chrome. paybackActive is whether a payback link is
+// currently active (the hidden linked_expense_id is present): it decides whether
+// a '+' line previews as a payback (green, '−') or a standalone income (blue, no
+// '−'), mirroring the same distinction GatePayback enforces on save (ADR-0009
+// amendment, #59/#63).
+func buildPreview(raw string, p expense.ParsedEntry, interactive, editing, paybackActive bool) previewView {
 	if strings.TrimSpace(raw) == "" {
 		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
 	}
 	account, isDefault := accountDisplay(p.Account)
 	v := previewView{
 		HasAmount:      p.HasAmount,
-		IsCredit:       p.IsIncome,
+		IsIncome:       p.IsIncome,
+		IsPayback:      p.IsIncome && paybackActive,
 		DateLabel:      p.Date.Format(dayLabelLayout),
 		Description:    p.Description,
 		Account:        account,
@@ -117,7 +128,7 @@ func buildPreview(raw string, p expense.ParsedEntry, interactive, editing bool) 
 		Editing: editing,
 	}
 	if p.HasAmount {
-		if p.IsIncome {
+		if v.IsPayback {
 			v.Amount = formatCredit(p.Amount)
 		} else {
 			v.Amount = formatEuro(p.Amount)
@@ -154,20 +165,22 @@ type dayGroup struct {
 }
 
 // rowView is one row as shown in the list — an expense or a standalone income,
-// discriminated by IsCredit (the html/template idiom, since it has no type
+// discriminated by IsIncome (the html/template idiom, since it has no type
 // switch, ADR-0009). Account is always non-blank — an account-less row surfaces
 // as "@personal" (AccountDefault true) rather than blank, so the default account
 // is visible and consistent everywhere.
 type rowView struct {
 	// ID is the stored record's identity, threaded through so the row's edit and
 	// delete controls can target its kind-qualified endpoints — /edit/income and
-	// /delete/income for a credit row, the expense twins otherwise (ADR-0009).
+	// /delete/income for an income row, the expense twins otherwise (ADR-0009).
 	ID int64
-	// IsCredit marks a standalone income: it renders as a green "−€X.XX" credit
-	// row and, unlike an expense, carries no split marker and does not move the
-	// day total. It still exposes edit/delete controls (to its income endpoints).
-	IsCredit       bool
-	Amount         string // "€X.XX" for an expense; "−€X.XX" for a credit
+	// IsIncome marks a standalone income: it renders blue with no leading '−'
+	// and, unlike an expense, carries no split marker and does not move the day
+	// total (ADR-0009 amendment, #59/#63). It still exposes edit/delete controls
+	// (to its income endpoints). A payback is never a row of its own — it nets
+	// its parent expense instead (see Paybacks below) and stays green with '−'.
+	IsIncome       bool
+	Amount         string // "€X.XX" for an expense; plain "€X.XX" (styled blue) for a standalone income
 	Description    string
 	Account        string // "@work", or "@personal" when defaulted
 	AccountDefault bool
@@ -232,7 +245,7 @@ const (
 // feedItem is one entry in the interleaved list feed before day grouping: its
 // row view plus the sort keys and the day-total contribution. cost is the net
 // cost this item adds to its day's total — an expense's amount, and zero for a
-// standalone income, which renders green but must not move the day total
+// standalone income, which renders blue but must not move the day total
 // (ADR-0009).
 type feedItem struct {
 	date      time.Time
@@ -248,7 +261,7 @@ type feedItem struct {
 // is ordered by date then created_at descending — the one recency key both kinds
 // share — keeping a day's rows most-recently-added-first across expenses and
 // incomes alike. Each group's total is the sum of its expenses' net cost only —
-// a standalone income renders as a green credit row but does not move it, so the
+// a standalone income renders as a blue income row but does not move it, so the
 // total keeps meaning "what the day cost me". Linked paybacks (a non-nil
 // LinkedExpenseID) are not standalone rows: they are bucketed onto their parent
 // expense, where the derived net cost (paid − Σ paybacks) nets the parent's
@@ -256,7 +269,7 @@ type feedItem struct {
 func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.Time) []dayGroup {
 	// Two bulk reads, one in-memory stitch (ADR-0009): bucket the incomes by their
 	// linked_expense_id, so each expense can attach its paybacks; a nil link is a
-	// standalone credit that stays a feed row of its own.
+	// standalone income that stays a feed row of its own.
 	paybacks := make(map[int64][]expense.Income)
 	var standalone []expense.Income
 	for _, i := range incomes {
@@ -321,8 +334,11 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 			cost:      0, // a standalone income does not move the day total
 			row: rowView{
 				ID:             i.ID,
-				IsCredit:       true,
-				Amount:         formatCredit(i.Amount),
+				IsIncome:       true,
+				// Plain formatEuro, not formatCredit: a standalone income has no leading
+				// '−' (ADR-0009 amendment, #59/#63) — the blue colour comes from the
+				// .row.income CSS rule, keyed off IsIncome, not from the amount string.
+				Amount:         formatEuro(i.Amount),
 				Description:    i.Description,
 				Account:        accountLabel(i.Account),
 				AccountDefault: i.Account == nil,

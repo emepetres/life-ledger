@@ -242,8 +242,9 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	// htmx includes every named field of the input's closest form in the
 	// request, and that hidden field lives in the same form as the quick-add
 	// input (ADR-0009 amendment, #62).
-	parsed := expense.Parse(raw, s.now()).GatePayback(linkedExpenseID(r) != nil)
-	s.renderPartial(w, "preview", buildPreview(raw, parsed, true, editing))
+	linked := linkedExpenseID(r) != nil
+	parsed := expense.Parse(raw, s.now()).GatePayback(linked)
+	s.renderPartial(w, "preview", buildPreview(raw, parsed, true, editing, linked))
 }
 
 // renderForm renders the home page with the given status and plain quick-add
@@ -299,7 +300,7 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	// what /preview would show for the same state.
 	parsed := expense.Parse(v.Raw, s.now()).GatePayback(v.Payback)
 	v.HTMXSrc = s.htmxSrc
-	v.Preview = buildPreview(v.Raw, parsed, false, v.Editing)
+	v.Preview = buildPreview(v.Raw, parsed, false, v.Editing, v.Payback)
 	v.Groups = groupByDay(expenses, incomes, s.now())
 	s.render(w, status, v)
 }
