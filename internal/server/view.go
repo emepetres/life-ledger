@@ -333,8 +333,8 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 			createdAt: i.CreatedAt,
 			cost:      0, // a standalone income does not move the day total
 			row: rowView{
-				ID:             i.ID,
-				IsIncome:       true,
+				ID:       i.ID,
+				IsIncome: true,
 				// Plain formatEuro, not formatCredit: a standalone income has no leading
 				// '−' (ADR-0009 amendment, #59/#63) — the blue colour comes from the
 				// .row.income CSS rule, keyed off IsIncome, not from the amount string.
