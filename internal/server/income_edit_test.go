@@ -63,9 +63,9 @@ func TestEditIncomeFormLoadsCanonicalLineInIncomeMode(t *testing.T) {
 }
 
 // AC: POST /edit/income/{id} updates the income in place and it stays an income —
-// the edited fields show in a green credit row, and the day total is still
-// unmoved by it (ADR-0009).
-func TestEditIncomeSavePersistsAndStaysCredit(t *testing.T) {
+// the edited fields show blue with no leading '−', and the day total is still
+// unmoved by it (ADR-0009, amended #59/#63).
+func TestEditIncomeSavePersistsAndStaysBlue(t *testing.T) {
 	ts := newTestServer(t)
 	postAdd(t, ts, "30 lunch")
 	_, added := postAdd(t, ts, "+40 refund")
@@ -76,12 +76,15 @@ func TestEditIncomeSavePersistsAndStaysCredit(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /edit/income status = %d, want 200 after redirect", resp.StatusCode)
 	}
-	// The edited income shows as a green credit with its new fields.
-	if !strings.Contains(body, "−€45.00") || !strings.Contains(body, "tax refund") {
+	// The edited income shows its new fields, with no leading '−'.
+	if !strings.Contains(body, "€45.00") || !strings.Contains(body, "tax refund") {
 		t.Errorf("edited income fields should show in the list; got:\n%s", body)
 	}
-	if !strings.Contains(body, `class="row credit"`) {
-		t.Errorf("an edited income must stay a credit row; got:\n%s", body)
+	if strings.Contains(body, "−€45.00") {
+		t.Errorf("an edited standalone income must not carry the leading −; got:\n%s", body)
+	}
+	if !strings.Contains(body, `class="row income"`) {
+		t.Errorf("an edited income must stay an income row; got:\n%s", body)
 	}
 	// The day total still reflects the expense only (€30.00) — the income never
 	// moves it, before or after the edit.
@@ -89,7 +92,7 @@ func TestEditIncomeSavePersistsAndStaysCredit(t *testing.T) {
 		t.Errorf("day total should stay €30.00 (income never moves it); got:\n%s", body)
 	}
 	// The stale amount is gone.
-	if strings.Contains(body, "−€40.00") {
+	if strings.Contains(body, "€40.00") {
 		t.Errorf("the pre-edit amount should be replaced; got:\n%s", body)
 	}
 }
@@ -117,10 +120,10 @@ func TestEditPaybackKeepsLink(t *testing.T) {
 		t.Fatalf("POST /edit/income payback status = %d, want 200", resp.StatusCode)
 	}
 
-	// Still a payback: nested under the parent (not a standalone credit row), and
+	// Still a payback: nested under the parent (not a standalone income row), and
 	// the parent's net cost re-derived as 90 − 40 = €50.00.
-	if strings.Contains(body, `class="row credit"`) {
-		t.Errorf("an edited payback must not detach into a standalone credit row; got:\n%s", body)
+	if strings.Contains(body, `class="row income"`) {
+		t.Errorf("an edited payback must not detach into a standalone income row; got:\n%s", body)
 	}
 	if !strings.Contains(body, "from 1 payback") {
 		t.Errorf("the edited payback should stay under its parent's disclosure; got:\n%s", body)
@@ -145,7 +148,7 @@ func TestDeleteIncomeRemovesRow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /delete/income status = %d, want 200 after redirect", resp.StatusCode)
 	}
-	if strings.Contains(body, "refund") || strings.Contains(body, "−€40.00") {
+	if strings.Contains(body, "refund") || strings.Contains(body, "€40.00") {
 		t.Errorf("deleted income should be gone from the list; got:\n%s", body)
 	}
 	// The expense is untouched.

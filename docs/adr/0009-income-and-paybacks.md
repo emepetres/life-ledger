@@ -101,7 +101,9 @@ An income reuses the expense free-text entry/edit path
   machinery (no new control flow).
 - The **preview** echoes the income amount as a green `−€30.00` credit chip (it
   subtracts) plus the resolved date/description/account chips, exactly like an
-  expense.
+  expense. *(Amended [#59](https://github.com/emepetres/life-ledger/issues/59):
+  a standalone `+…` line — no active payback link — previews **blue with no `−`**;
+  only a payback previews green with the `−`. See the amendment below.)*
 - The **parent link is set out-of-band, never typed.** A per-row `+ payback`
   action on an expense opens the quick-add pre-set to income and pre-linked
   (shown as a non-editable `↩ payback → <expense>` chip with a Cancel
@@ -124,12 +126,49 @@ plainly:
 - **Over-repaid (negative net)** renders **green**, consistent with the ungated
   derivation.
 - **Standalone incomes** render as their own green credit rows, interleaved by
-  their own date into the existing day groups.
+  their own date into the existing day groups. *(Amended
+  [#59](https://github.com/emepetres/life-ledger/issues/59): a standalone income
+  renders **blue with no leading `−`**, not green — see the amendment below.
+  Over-repaid net and individual paybacks keep green with the `−`.)*
 - Rows with **no paybacks** are visually unchanged from today.
 - **Day total** = the sum of **net costs of expenses only**. Standalone incomes
   render as green rows but do **not** move the day total, so it keeps meaning
   "what the day cost me" (paybacks already netted in) and can't be flipped
   negative by a one-off credit.
+
+## Amendment ([#59](https://github.com/emepetres/life-ledger/issues/59)) — standalone-income display: blue, no leading `−`
+
+The original Display decisions above rendered **every** income green with a
+leading `−`. In use the `−` reads wrong on a **standalone income** (no
+`linked_expense_id`): the `−` says "this claws back a specific expense", but a
+standalone income nets against nothing on screen — it does not even move a day
+total. So #59 revises the display treatment. This is **display only** — the
+record shape, the `amount > 0` rule, and the `Total expenses = ΣExpense −
+ΣIncome` math are all untouched:
+
+- A **standalone income** (`linked_expense_id IS NULL`) renders **blue, with no
+  leading `−`** — both its list-row headline amount and its live `+…` preview
+  chip. New palette tokens `--income: #1d4ed8` (text) and `--income-soft:
+  #dbeafe` (preview-chip background), kept visibly distinct from the indigo
+  `--acct` account chip.
+- Everything that genuinely nets **against an expense keeps green with the `−`**:
+  each **payback** in the disclosure drawer, the `−€X from N paybacks` summary,
+  and an **over-repaid** expense's negative net headline.
+- The preview therefore colours by **link state**: a `+…` line typed with **no
+  active payback link** is a standalone income → blue / no-`−`; the same line in
+  **payback mode** (an active `linked_expense_id`) is a payback → green / `−`.
+
+### Payback entry must stay an income (new save-gate rule)
+
+Also from #59, extending the entry-syntax save gates (§ "Entry syntax — the
+leading `+` sigil"): when the quick-add box is in **payback mode** (a
+`linked_expense_id` is present, set out-of-band by the `+ payback` action), the
+line **must remain an income** — its leading `+` cannot be removed to turn the
+entry into an expense. A non-income line in payback mode is a new save-gate
+violation: Save is disabled in the live preview, and the server `/add` handler
+mirrors the refusal for the no-JS path. It is handled by the existing
+lenient-parse / gate-on-save machinery — no new control flow, exactly like
+`*`-on-income.
 
 ## Store query shape
 

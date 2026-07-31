@@ -7,9 +7,9 @@ import (
 )
 
 // AC: POST /add with a "+40 …" line and no active link creates a standalone
-// income; it renders as a green credit row (a "−€40.00" amount) interleaved by
-// date, and the day total is left unchanged by it (ADR-0009).
-func TestAddStandaloneIncomeRendersCreditWithoutMovingTotal(t *testing.T) {
+// income; it renders blue with no leading '−' (ADR-0009 amendment, #59/#63),
+// interleaved by date, and the day total is left unchanged by it (ADR-0009).
+func TestAddStandaloneIncomeRendersBlueWithoutMovingTotal(t *testing.T) {
 	ts := newTestServer(t)
 
 	// An expense first, then a standalone income on the same day (today).
@@ -19,16 +19,20 @@ func TestAddStandaloneIncomeRendersCreditWithoutMovingTotal(t *testing.T) {
 		t.Fatalf("POST /add income status = %d, want 200 after redirect", resp.StatusCode)
 	}
 
-	// The credit renders green with a minus sign, and its description shows.
-	if !strings.Contains(body, "−€40.00") {
-		t.Errorf("standalone income should render a green −€40.00 credit; got:\n%s", body)
+	// No leading '−': a standalone income is blue, not the payback/net credit
+	// green.
+	if !strings.Contains(body, "€40.00") {
+		t.Errorf("standalone income should render €40.00; got:\n%s", body)
+	}
+	if strings.Contains(body, "−€40.00") {
+		t.Errorf("standalone income must not carry the leading −; got:\n%s", body)
 	}
 	if !strings.Contains(body, "refund") {
 		t.Errorf("income description missing; got:\n%s", body)
 	}
-	// The row is marked as a credit row.
-	if !strings.Contains(body, `class="row credit"`) {
-		t.Errorf("income should render a credit row; got:\n%s", body)
+	// The row is marked as an income row, styled blue.
+	if !strings.Contains(body, `class="row income"`) {
+		t.Errorf("income should render an income row; got:\n%s", body)
 	}
 	// The day total reflects the expense only (€30.00), unmoved by the income; it
 	// is not flipped negative or reduced.
@@ -93,18 +97,25 @@ func TestAddIncomeWithSplitRejected(t *testing.T) {
 	}
 }
 
-// AC: the live preview of a "+…" line shows a green "−€X.XX" credit chip
-// alongside the resolved date/description/account chips (ADR-0009).
-func TestPreviewIncomeShowsGreenCreditChip(t *testing.T) {
+// AC: the live preview of a "+…" line with no active payback link shows a blue
+// "€X.XX" chip with no leading '−', alongside the resolved date/description/
+// account chips (ADR-0009 amendment, #59/#63).
+func TestPreviewStandaloneIncomeShowsBlueChip(t *testing.T) {
 	ts := newTestServer(t)
 
 	// testToday is 2026-07-21 (Tue).
 	_, body := postPreview(t, ts, "+30 Bob share @bbva")
-	if !strings.Contains(body, "−€30.00") {
-		t.Errorf("income preview should show a −€30.00 credit chip; got:\n%s", body)
+	if !strings.Contains(body, "€30.00") {
+		t.Errorf("income preview should show €30.00; got:\n%s", body)
 	}
-	if !strings.Contains(body, "credit") {
-		t.Errorf("income preview amount chip should carry the credit class; got:\n%s", body)
+	if strings.Contains(body, "−€30.00") {
+		t.Errorf("standalone income preview must not carry the leading −; got:\n%s", body)
+	}
+	if !strings.Contains(body, "chip amount income") {
+		t.Errorf("standalone income preview amount chip should carry the income class; got:\n%s", body)
+	}
+	if strings.Contains(body, "chip amount credit") {
+		t.Errorf("standalone income preview must not carry the payback credit class; got:\n%s", body)
 	}
 	// The resolved fields still show, exactly like an expense.
 	for _, want := range []string{"Tue 21 Jul", "Bob share", "@bbva"} {

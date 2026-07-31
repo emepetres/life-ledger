@@ -25,11 +25,11 @@ An expense rendered back into entry syntax from its stored fields — the invers
 _Avoid_: Raw text, verbatim line
 
 **Income**:
-A stored record that is structurally an Expense but negative — it subtracts from total expenses. Reuses the expense entry/edit path (the free-text parser, the record shape, the canonical entry line, the edit/delete flow); the one thing it lacks is the `*` split marker (an income is never split). Entered with a leading `+` on the amount (`+30 …`). Lives in its own `income` table.
+A stored record that is structurally an Expense but negative — it subtracts from total expenses. Reuses the expense entry/edit path (the free-text parser, the record shape, the canonical entry line, the edit/delete flow); the one thing it lacks is the `*` split marker (an income is never split). Entered with a leading `+` on the amount (`+30 …`). Lives in its own `income` table. A **standalone** income (not linked to an expense — see Payback) displays **blue with no leading `−`**: money-in that nets against nothing on screen reads apart from a payback (ADR-0009 [#59](https://github.com/emepetres/life-ledger/issues/59) amendment).
 _Avoid_: Credit, refund, deposit
 
 **Payback**:
-An Income linked to a specific Expense (`linked_expense_id`), recording money received back against a fronted group ticket. Carries its own date and own account, both independent of the parent — you can front from one account and be repaid into another, on another day. A standalone income has no such link; a payback is the linked case.
+An Income linked to a specific Expense (`linked_expense_id`), recording money received back against a fronted group ticket. Carries its own date and own account, both independent of the parent — you can front from one account and be repaid into another, on another day. A standalone income has no such link; a payback is the linked case. A payback displays **green with a leading `−`** (it claws back part of a specific expense), unlike a standalone income's blue no-`−` treatment.
 _Avoid_: Repayment, settlement, reimbursement
 
 **Net cost** (derived):
