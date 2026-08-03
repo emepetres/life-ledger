@@ -146,3 +146,106 @@ lands. Both default to the zero-infra, no-repo-write path:
       artifact. When on, the same HTML is published to GitHub Pages.
 - [ ] **Dashboard cron line** — the refresh cadence for the read-only
       `dashboard.yml` (in addition to its event triggers). Default daily.
+
+## Dispatch logic
+
+How a single issue is routed to a run. The decision is a **pure function** —
+`afk.Decide` in [`internal/afk`](../../internal/afk/dispatch.go) — over data the
+activation job has already fetched from the GitHub API (labels, body, the parent
+spec, the remote's branch list, the open blockers). No network, no `gh` calls
+inside the unit; the thin [`cmd/afk-dispatch`](../../cmd/afk-dispatch/main.go)
+wrapper marshals JSON in and the decision out. This keeps the highest-risk
+correctness surface unit-tested rather than trapped in fragile injected-value
+bash (user story 63).
+
+`Decide` returns one decision:
+
+```
+{ skill, branch, concurrencyGroup, action, reason }
+```
+
+- **`action`** is `run`, `skip`, or `refuse`.
+- **`concurrencyGroup` always equals `branch`** — per-spec-branch serialisation,
+  so two agents heading for the same PR branch never race (user story 13).
+- On a **refusal**, `skill` and `branch` are empty (there is no run). On a
+  **skip** or **run**, both report what the run is (or would be), so the
+  dashboard can show a skipped issue's intended routing.
+
+Precedence is **refuse → skip → run**: a HITL-only ticket is refused even when
+it is also blocked, and a blocked-but-runnable ticket skips rather than runs.
+
+### Skill derivation
+
+The skill comes from the issue's single `wayfinder:*` label:
+
+| `wayfinder:*` label           | Outcome                             |
+| ----------------------------- | ----------------------------------- |
+| `wayfinder:research`          | `run` → `/research`                 |
+| `wayfinder:task`              | `run` → `/implement`                |
+| _(no wayfinder label)_        | `run` → `/implement` (the default)  |
+| `wayfinder:grilling`          | `refuse` — HITL-only                |
+| `wayfinder:prototype`         | `refuse` — HITL-only                |
+| `wayfinder:map`               | `refuse` — HITL-only                |
+| any other `wayfinder:<value>` | `refuse` — unknown label            |
+| two or more `wayfinder:*`      | `refuse` — ambiguous               |
+
+`grilling` / `prototype` / `map` are human-in-the-loop work and must never run
+headless (user story 7). An unknown or ambiguous label is refused for the same
+reason — the system routes only what it understands.
+
+### Branch-resolution ladder
+
+The branch a run works on is resolved by a four-rung ladder, first match wins
+(user story 19). The intent is **one PR per spec**: tickets under one spec
+converge onto one branch.
+
+1. **Parent spec's `Branch:` line.** If the ticket has a parent spec (via its
+   `Part of #<n>` linkage) and that spec's body contains a `Branch: <name>`
+   line, use `<name>`. The explicit declaration is authoritative — it wins even
+   when a shared branch already exists.
+2. **Shared spec branch.** Otherwise, if the parent-derived branch
+   `afk/<parent-n>-<parent-slug>` already exists on the remote — a sibling
+   ticket opened it first — reuse it, so siblings accumulate on one PR.
+3. **Ticket's own `Branch:` line.** Otherwise, if the ticket's own body contains
+   a `Branch: <name>` line, use `<name>`.
+4. **Derive from `main`.** Otherwise derive `afk/<n>-<slug>` from the ticket's
+   own number and title, cut from `main`, and let the finalize phase open a
+   draft PR against `main`.
+
+A `Branch:` line is matched anywhere in the body, case-insensitively, tolerating
+markdown bold markers and backticks around the value (`` **Branch:** `x` ``
+reads as `x`).
+
+### Slug derivation
+
+The `<slug>` in a derived branch (`afk/<n>-<slug>`) comes from the issue title:
+
+- lowercased;
+- every run of non-alphanumeric characters (spaces, punctuation, emoji,
+  accented letters) collapsed to a single `-`;
+- leading and trailing `-` trimmed;
+- truncated to 50 characters, with no trailing `-`.
+
+Non-ASCII letters are **dropped**, not transliterated, keeping the result a safe
+git ref. When a title slugifies to nothing (e.g. emoji-only), the branch falls
+back to `afk/<n>` with no trailing hyphen.
+
+Examples:
+
+| Title                                 | Derived branch (issue #79)                |
+| ------------------------------------- | ----------------------------------------- |
+| `AFK: dispatch helper (internal/afk)` | `afk/79-afk-dispatch-helper-internal-afk` |
+| `📋 Spec: Graph Engineering System`   | `afk/79-spec-graph-engineering-system`    |
+| `🎉🎉🎉`                              | `afk/79`                                  |
+
+### Blocker gate
+
+If any blocking-dependency edge points at a still-open issue, the decision is
+`skip`: the `afk` label is **left in place** and nothing runs this pass. There
+is no queue and no retry in v1 — the next `workflow_dispatch` sweep or `labeled`
+event re-checks the gate (user stories 10, 11). The skipped decision still
+reports the resolved skill and branch, and its `reason` names the open
+blocker(s), so the state is visible rather than silent.
+
+The activation job supplies the open-blocker numbers; the unit only decides on
+them, keeping the gate itself testable.
