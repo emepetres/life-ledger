@@ -9,6 +9,12 @@ description: >
   `LLM_*` secrets) so a second engine is a change to the `engine:` block alone.
   Spec: #77. This ticket: #81.
 
+# Per-run title (Actions tab): `run-name` supports github/inputs/vars but NOT
+# `needs`, and the top-level `name` (derived from the H1 below) supports NO
+# expression contexts at all — so the dynamic issue number lives here, and the
+# H1 stays a static literal.
+run-name: "AFK · `/implement` on issue #${{ github.event.issue.number || inputs.issue_number }}"
+
 # ── Phase boundaries at a glance ────────────────────────────────────────────
 #   dispatch (custom job)  issues:write   — role-gated to maintainers; derives
 #                                            skill+branch+concurrency via
@@ -274,7 +280,7 @@ steps:
       fi
 ---
 
-# AFK · `/implement` on issue #${{ needs.dispatch.outputs.issue_number }}
+# AFK · `/implement`
 
 You are the agent phase of the AFK dispatch system (spec #77). The dispatch phase
 has already role-gated the maintainer, resolved the skill and branch, and claimed
