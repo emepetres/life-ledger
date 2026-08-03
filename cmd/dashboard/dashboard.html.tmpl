@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AFK dashboard — {{.Repo}}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🤖</text></svg>">
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --line: #e5e7eb;
+    --card: #f9fafb; --accent: #3b5bdb;
+    --ok: #2b8a3e; --warn: #e67700; --err: #c92a2a; --review: #1971c2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --line: #30363d;
+      --card: #161b22; --accent: #6b8afd;
+      --ok: #3fb950; --warn: #d29922; --err: #f85149; --review: #58a6ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--fg);
+  }
+  header { margin-bottom: 1.5rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .meta { color: var(--muted); font-size: .85rem; }
+  section {
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); padding: 1rem 1.25rem; margin-bottom: 1.25rem;
+  }
+  h2 { font-size: 1.05rem; margin: 0 0 .75rem; display: flex; align-items: baseline; gap: .5rem; }
+  h2 .count { color: var(--muted); font-weight: 400; font-size: .85rem; }
+  .empty { color: var(--muted); font-style: italic; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  tr:last-child td { border-bottom: none; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85em; }
+  .tag { display: inline-block; padding: .05rem .4rem; border-radius: 6px; font-size: .75rem; border: 1px solid var(--line); }
+  .st-success { color: var(--ok); }
+  .st-failure { color: var(--err); }
+  .st-running { color: var(--warn); }
+  .st-review { color: var(--review); }
+  .outcome { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8rem; color: var(--muted); margin: .25rem 0 0; }
+  .nothing { color: var(--muted); font-style: italic; }
+  .overflow { overflow-x: auto; }
+  pre.mermaid { background: transparent; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AFK dashboard{{if .Repo}} — {{.Repo}}{{end}}</h1>
+  <div class="meta">Rebuilt from the GitHub API{{if .GeneratedAt}} · {{.GeneratedAt}}{{end}}</div>
+</header>
+
+<section id="graph">
+  <h2>Dependency graph</h2>
+  {{if .Graph.Nodes}}
+  <div class="overflow"><pre class="mermaid">{{.MermaidGraph}}</pre></div>
+  {{else}}
+  <p class="empty">No AFK issues in the graph.</p>
+  {{end}}
+</section>
+
+<section id="needs-review">
+  <h2>Needs review <span class="count">{{len .NeedsReview}}</span></h2>
+  {{if .NeedsReview}}
+  <table>
+    <thead><tr><th>Issue</th><th>Skill</th><th>Branch</th></tr></thead>
+    <tbody>
+    {{range .NeedsReview}}
+      <tr>
+        <td><a href="{{.URL}}">#{{.Number}}</a> {{.Title}}</td>
+        <td><span class="tag">{{.Skill}}</span></td>
+        <td><code>{{.Branch}}</code></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">Nothing waiting for review.</p>
+  {{end}}
+</section>
+
+<section id="in-flight">
+  <h2>In flight <span class="count">{{len .InFlight}}</span></h2>
+  {{if .InFlight}}
+  <table>
+    <thead><tr><th>Issue</th><th>Skill</th><th>Branch</th><th>Run</th></tr></thead>
+    <tbody>
+    {{range .InFlight}}
+      <tr>
+        <td><a href="{{.URL}}">#{{.Number}}</a> {{.Title}}</td>
+        <td><span class="tag">{{.Skill}}</span></td>
+        <td><code>{{.Branch}}</code></td>
+        <td>{{if .RunURL}}<a class="st-running" href="{{.RunURL}}">running ↗</a>{{else}}<span class="nothing">—</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">No runs in flight.</p>
+  {{end}}
+</section>
+
+<section id="failures">
+  <h2>Failures <span class="count">{{len .Failures}}</span></h2>
+  {{if .Failures}}
+  <table>
+    <thead><tr><th>Issue</th><th>Phase</th><th>Skill</th><th>Branch</th><th>Logs</th><th>Partial work</th></tr></thead>
+    <tbody>
+    {{range .Failures}}
+      <tr>
+        <td><a href="{{.URL}}">#{{.Number}}</a> {{.Title}}</td>
+        <td class="st-failure">{{.Phase}}</td>
+        <td><span class="tag">{{.Skill}}</span></td>
+        <td><code>{{.Branch}}</code></td>
+        <td>{{if .RunURL}}<a href="{{.RunURL}}">run logs ↗</a>{{else}}<span class="nothing">—</span>{{end}}</td>
+        <td>
+          {{if .Artifacts}}
+            {{range .Artifacts}}<a href="{{.URL}}">{{.Label}}</a><br>{{end}}
+          {{else}}
+            <span class="nothing">nothing pushed</span>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">No failed runs.</p>
+  {{end}}
+</section>
+
+<section id="recent-runs">
+  <h2>Recent runs <span class="count">{{len .RecentRuns}}</span></h2>
+  {{if .RecentRuns}}
+  <table>
+    <thead><tr><th>Run</th><th>Status</th><th>Result</th><th>When</th></tr></thead>
+    <tbody>
+    {{range .RecentRuns}}
+      <tr>
+        <td><a href="{{.URL}}">{{.Title}}</a></td>
+        <td>{{.Status}}</td>
+        <td>
+          {{if eq .Conclusion "success"}}<span class="st-success">success</span>
+          {{else if eq .Conclusion "failure"}}<span class="st-failure">failure</span>
+          {{else if .Conclusion}}{{.Conclusion}}
+          {{else}}<span class="st-running">—</span>{{end}}
+        </td>
+        <td>{{.When}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">No recent runs.</p>
+  {{end}}
+</section>
+
+<section id="open-prs">
+  <h2>Open AFK PRs <span class="count">{{len .OpenPRs}}</span></h2>
+  {{if .OpenPRs}}
+  <table>
+    <thead><tr><th>PR</th><th>Branch</th><th>Source</th><th>Outcome</th></tr></thead>
+    <tbody>
+    {{range .OpenPRs}}
+      <tr>
+        <td><a href="{{.URL}}">#{{.Number}}</a> {{.Title}}</td>
+        <td><code>{{.Branch}}</code></td>
+        <td>{{if .Issue}}Part of #{{.Issue}}{{else}}<span class="nothing">—</span>{{end}}</td>
+        <td>{{if .Outcome}}<pre class="outcome">{{.Outcome}}</pre>{{else}}<span class="nothing">no outcome comment</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">No open AFK PRs.</p>
+  {{end}}
+</section>
+
+<script>{{.MermaidJS}}</script>
+<script>
+  (function () {
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    // startOnLoad renders every <pre class="mermaid"> block on load.
+    window.mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'default' });
+  })();
+</script>
+</body>
+</html>

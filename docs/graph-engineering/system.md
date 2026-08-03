@@ -249,3 +249,85 @@ blocker(s), so the state is visible rather than silent.
 
 The activation job supplies the open-blocker numbers; the unit only decides on
 them, keeping the gate itself testable.
+
+## Dashboard: data model & rendering
+
+The private maintainer view of the whole AFK graph (user stories 45–52). Like
+the dispatch logic, the risky part is pushed down into a **pure, fixture-testable
+function** so the six panels are verified without a live GitHub API or a browser
+(user story 64). The generator is [`cmd/dashboard`](../../cmd/dashboard), split
+in two along that seam:
+
+- A **thin GitHub-API fetch** — [`main.go`](../../cmd/dashboard/main.go), all the
+  I/O — shells out to the `gh` CLI to pull open AFK issues, open `afk` PRs (with
+  their comments), and the recent run list, then assembles a `DashboardData`.
+  It is the untested shell; it holds every `gh` call and the clock.
+- A **pure `render(DashboardData) → html`** — [`render.go`](../../cmd/dashboard/render.go) —
+  that turns that data into one self-contained `index.html` via `html/template`.
+  No network, no clock, no filesystem beyond the compile-time-embedded Mermaid
+  bundle, so it is deterministic under test.
+
+The dashboard is **rebuilt statelessly from the API each time** (graph, PRs, and
+run list re-derived on every build), so it can never drift out of sync with
+reality (user story 48). It is driven by a decoupled, read-only `dashboard.yml`
+that can never conflict with an AFK run (user story 49).
+
+### `DashboardData`
+
+`DashboardData` shapes the dependency graph plus one field per panel — the fetch
+fills it, the renderer only reads it:
+
+```
+DashboardData{
+  GeneratedAt, Repo string      // header chrome (timestamp supplied by the caller)
+  Graph       DependencyGraph   // Nodes []GraphNode + Edges []GraphEdge
+  NeedsReview []IssueRow        // the needs-review queue
+  InFlight    []RunningRow      // claimed afk:running issues + live-run link
+  Failures    []FailureRow      // afk:failed issues with the D7 hand-back fields
+  RecentRuns  []RunRow          // the tail of the AFK run list
+  OpenPRs     []PRRow           // open [afk] PRs with the D3 outcome comment
+}
+```
+
+A `GraphEdge` is a blocking-dependency edge `{Blocker, Blocked}`, rendered as
+`Blocker --> Blocked` so the arrow reads "must finish before". A `GraphNode`
+carries its AFK `State`, which colours the node.
+
+### The six panels and their states
+
+| Panel                | Source field  | Populated state                                                            | Empty state              |
+| -------------------- | ------------- | -------------------------------------------------------------------------- | ------------------------ |
+| **Dependency graph** | `Graph`       | A hand-drawn Mermaid flowchart, one node per AFK issue, coloured by state. | "No AFK issues in the graph." (no Mermaid block emitted) |
+| **Needs review**     | `NeedsReview` | Issue · derived skill · resolved branch.                                   | "Nothing waiting for review." |
+| **In flight**        | `InFlight`    | Issue · skill · branch · link to the live run.                             | "No runs in flight."     |
+| **Failures**         | `Failures`    | The full D7 hand-back: which **phase** died, **run-logs** link, derived **skill** + **branch**, and partial-artifact links — or **"nothing pushed"** when nothing was pushed. | "No failed runs." |
+| **Recent runs**      | `RecentRuns`  | Run · status · terminal result (success/failure) · when.                   | "No recent runs."        |
+| **Open AFK PRs**     | `OpenPRs`     | PR · branch · `Part of #<n>` linkage · the **D3 outcome comment** (in-agent typecheck / test / code-review). | "No open AFK PRs."       |
+
+Node state colours: `afk` (blue), `afk:running` (amber), `needs-review` (green),
+`afk:failed` (red) — the same vocabulary as the [dispatch](#dispatch-logic)
+state machine.
+
+### Vendored Mermaid & the self-contained guarantee
+
+The dependency graph uses Mermaid's **`look: handDrawn`** style, set via the
+diagram's config frontmatter. To keep the HTML self-contained with **zero
+external fetches** (user story 52), the full mermaid.js bundle is **vendored and
+inlined**: [`cmd/dashboard/vendor/mermaid-11.4.1.min.js`](../../cmd/dashboard/vendor)
+is `go:embed`ed and written verbatim into a plain `<script>` tag (as
+`template.JS`, so `html/template` inlines rather than escapes it). The dist build
+assigns `globalThis.mermaid`, so no module loader or CDN is involved.
+
+The Mermaid source is emitted into a `<pre class="mermaid">` block. Because the
+browser decodes an element's `textContent`, `html/template`'s HTML-escaping of
+that block is **both XSS-safe and Mermaid-correct** — `-->` survives as `-->`,
+and a double quote in an issue title is down-quoted so it can't break a node
+label. Styles are inlined in a `<style>` block; the favicon is a `data:` URI. The
+only external references are the `<a href>` navigation links into GitHub, which
+are user-initiated clicks, not auto-fetched resources.
+
+A test (`render_test.go`) asserts this guarantee directly: no `src=` or `<link …
+href=>` points at an external URL, no `<script src>` exists, and the inlined
+bundle's `globalThis.mermaid` export marker is present — the same
+rendered-output discipline as `internal/server/view_test.go` and
+`preview_test.go`.

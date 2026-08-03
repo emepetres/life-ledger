@@ -21,7 +21,17 @@ cmd/life-ledger/     Entrypoint: reads config from the environment, wires the
                      Embeds tzdata (import _ "time/tzdata") so "today" is correct
                      on a minimal container image (ADR-0005).
 cmd/hashpw/          Dev helper: bcrypt-hash a password for LIFELEDGER_PASSWORD_HASH.
+cmd/afk-dispatch/    AFK subsystem: thin JSON wrapper over internal/afk.Decide for
+                     the GitHub Actions activation job.
+cmd/dashboard/       AFK subsystem: builds the self-contained index.html dashboard
+                     — a thin gh-CLI fetch plus a pure, fixture-testable
+                     render(DashboardData). Mermaid.js is vendored-inline so the
+                     HTML has zero external fetches.
 
+internal/afk/        AFK subsystem: the pure decision core (Decide) that routes one
+                     issue to a run — skill derivation, branch-resolution ladder,
+                     blocker gate. No I/O. The away-from-keyboard dispatch system is
+                     documented in docs/graph-engineering/system.md.
 internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
                      and the Expense and Income records — two public types over a
                      shared unexported `entry` base; an Income is an expense-but-
