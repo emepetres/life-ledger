@@ -380,3 +380,161 @@ href=>` points at an external URL, no `<script src>` exists, and the inlined
 bundle's `globalThis.mermaid` export marker is present — the same
 rendered-output discipline as `internal/server/view_test.go` and
 `preview_test.go`.
+
+## Workflow topology & the `/implement` path
+
+The production workflow is a [gh-aw](https://github.github.com/gh-aw/) agentic
+workflow: a Markdown file with YAML frontmatter,
+[`.github/workflows/afk.md`](../../.github/workflows/afk.md), that `gh aw compile`
+turns into a hardened, SHA-pinned `.github/workflows/afk.lock.yml`. **Both files
+are committed**, and recompilation is a cheap always-on check — if the `.md` and
+`.lock.yml` drift, the run fails a lock-file staleness gate. Compile it with:
+
+```pwsh
+gh aw compile .github/workflows/afk.md
+```
+
+One `afk` label on a ready task issue drives the whole happy path, from the label
+to a **draft PR against `main` waiting for review**.
+
+### The three phases and the token split
+
+The run is three phases, and the defining invariant is that **the LLM provider
+key and a repo-write token never live in the same job** (spec #77, user stories
+36–37). gh-aw's native activation → agent → safe-outputs architecture gives this
+for free; the AFK-specific logic slots into it:
+
+| Phase | Compiled job(s) | Token scope | What it does |
+| ----- | --------------- | ----------- | ------------ |
+| **Dispatch** (activation) | custom `dispatch` job | `issues: write` (no LLM key) | Role-gated to maintainers. Derives skill + branch + concurrency group via [`internal/afk`](../../internal/afk/dispatch.go) (shelled out through [`cmd/afk-dispatch`](../../cmd/afk-dispatch/main.go)), claims the issue (`afk` → `afk:running`), and clears stale `afk:failed` / `needs-review`. |
+| **Agent** | `agent` job | **read-only** (`contents`/`issues`/`pull-requests: read`) + the LLM key | Checks out the resolved branch, loads the ticket with `gh issue view <n> --comments`, runs the inlined `/implement` method headlessly, and emits results **only** through safe-outputs. |
+| **Finalize** | generated `safe_outputs` job | `contents`/`issues`/`pull-requests: write` (no LLM key) | Executes the agent's safe-output requests: opens/updates the draft PR, posts the outcome comment, lands the issue in `needs-review`. |
+
+The **maintainer role-gate** is enforced in gh-aw's `pre_activation` job
+(`required-roles: admin, maintainer`); the `dispatch` job is gated on its
+`activated` output, so a non-maintainer's drive-by `afk` label **mutates no state
+and incurs no AI spend** — it is refused before the first `issues: write` call.
+The `agent` job is additionally gated on `needs.dispatch.outputs.action == 'run'`,
+so a `skip` (blocked) or `refuse` (HITL-only) decision from `internal/afk` never
+reaches the engine.
+
+The token split is verifiable straight from the `.lock.yml`: the
+`COPILOT_PROVIDER_API_KEY` / `COPILOT_PROVIDER_BASE_URL` bindings appear only in
+the `agent` job (and gh-aw's own `detection` scan), never in `dispatch` or
+`safe_outputs`; and `contents: write` appears only in `safe_outputs`.
+
+### The engine-neutral secret seam
+
+The `engine:` block is the **only** part that changes when swapping engines
+(spec #77, user stories 54–56). v1 ships `engine: copilot` in **BYOK** mode
+against an OpenAI-compatible endpoint, with a ~4-line `engine.env` that maps the
+engine-neutral secrets to the copilot provider vars:
+
+```yaml
+engine:
+  id: copilot
+  max-turns: 30
+  env:
+    COPILOT_PROVIDER_BASE_URL: ${{ secrets.LLM_BASE_URL }}   # activates BYOK
+    COPILOT_PROVIDER_API_KEY: ${{ secrets.LLM_API_KEY }}     # sidecar-isolated
+    COPILOT_PROVIDER_TYPE: openai                            # OpenAI-compatible
+    COPILOT_MODEL: ${{ vars.LLM_MODEL }}                     # a repo *variable*
+```
+
+`LLM_MODEL` is a repo **Actions variable**, not a secret, so the model swaps via
+Settings **without a `.lock.yml` recompile**. Under BYOK, gh-aw isolates the real
+credential in its API-proxy sidecar, so the agent process never sees the key.
+
+The provider **host must be listed as a literal** in `network.allowed`
+(`forge.plainconcepts.com`) — this is load-bearing, not optional. `network.allowed`
+is a compile-time, reviewer-auditable security artifact and **rejects every
+`${{ }}` expression**, secret *or* variable (the compiler errors with
+`domain pattern contains invalid character '$'`). And gh-aw does **not**
+auto-extract the host when the base URL comes from a secret — verified in the
+`.lock.yml`, where the firewall `allowDomains` omits any host it can only learn at
+runtime. Without the literal, the firewall blocks the BYOK api-proxy's upstream
+call and the run fails. The host is not a credential (only `LLM_API_KEY` is), so
+listing it is safe; the full URL still lives in the `LLM_BASE_URL` secret that
+feeds `COPILOT_PROVIDER_BASE_URL`. The egress allowlist is therefore `defaults` +
+the `go` ecosystem + the provider host. The invariant `/implement` prompt lives in
+**one shared import**,
+[`shared/afk-implement-method.md`](../../.github/workflows/shared/afk-implement-method.md),
+`{{#runtime-import}}`ed into the body — the single source of truth for agent
+behavior, shared verbatim by any second-engine validation copy.
+
+Skills load from the checked-out repo's own `.claude/skills` (claude
+auto-discovery) and `.agents/skills` (Copilot local-install) copies — there is
+**no `skills:` frontmatter** pulling from upstream `mattpocock/skills`.
+
+> **Toolchain note.** The spec inherited a "runs `npm ci` in setup" line from the
+> generic sandcastle reference, but life-ledger is a **Go** module (no
+> `package.json`). The inlined method uses the Go toolchain instead: `go build` /
+> `go vet` for the typecheck, `go test ./...` for the suite, `gofmt -l .` for the
+> format gate — mirroring [`ci-cd.yml`](../../.github/workflows/ci-cd.yml).
+
+### Skill invocation — inlined method, referenced sub-skills
+
+`/implement` is `disable-model-invocation: true`, so a headless engine cannot fire
+it by name (see [`docs/research/sandcastle-reference.md`](../research/sandcastle-reference.md)).
+Its method is therefore **inlined** into the shared prompt, which references the
+model-invocable `/tdd` (red → green → refactor at pre-agreed seams) and
+`/code-review` (Standards + Spec axes) **by name** so the agent loads them from
+the checkout. The agent commits only; it pushes nothing and edits no labels —
+every side effect is a safe-output request the finalize job executes.
+
+> **Recorded limitation (not a gate).** Under a headless engine, `/code-review`'s
+> parallel sub-agents degrade to a **single inline pass**; the outcome comment
+> says so. This is a documented v1 limitation, consistent across the Copilot
+> production engine and the opencode validation engine.
+
+### Branch resolution in practice, and the PR create-vs-push rule
+
+The `dispatch` phase resolves the branch by the
+[branch-resolution ladder](#branch-resolution-ladder) and hands it to the agent as
+`needs.dispatch.outputs.branch`. Before the engine starts, an agent-job step puts
+the workspace on that branch — **tracking the remote branch when it already
+exists** (a sibling ticket on a shared spec branch, rung 2), else **creating it
+from `main`**. That agent-job step runs, on the Linux Actions runner (an excerpt
+of the compiled workflow, not a command the reader runs):
+
+```
+if git ls-remote --exit-code --heads origin "$BRANCH"; then
+  git fetch origin "$BRANCH"; git checkout -B "$BRANCH" "origin/$BRANCH"
+else
+  git checkout -B "$BRANCH"
+fi
+```
+
+Finalize forks on whether a PR already exists for that head branch — **one rule,
+two shapes** (spec #77, D3):
+
+- **No open PR for the branch** → the agent emits **`create-pull-request`**: a
+  **draft** PR to `main`, title prefixed `[afk] `, labelled `afk`, its body
+  linking the issue with **`Part of #<n>`** (never `Fixes`/`Closes`, so nothing
+  auto-closes — `auto-close-issue: false`).
+- **An open PR already exists** → the agent emits
+  **`push-to-pull-request-branch`**, accumulating commits onto that one PR
+  ("one PR per spec branch" is emergent, not enforced).
+
+Either way the PR is **draft-only, never merged or self-approved**: the gate to
+`main` is a human review plus branch protection. An **empty diff** is a valid
+success sub-shape (`if-no-changes: warn`) — the outcome comment says nothing
+changed and the issue still lands in `needs-review`.
+
+Concurrency is controlled at two levels. A **repo-wide cap** on concurrent AFK
+agent runs is a static `engine.concurrency` group (`gh-aw-afk-agent`) — because a
+GitHub concurrency group is a mutex, this serialises agent execution to one run at
+a time across the workflow, the simplest safe spend guardrail (spec #77 D4).
+**Per-spec-branch serialization** is applied separately, where the race actually
+is — the finalize push — via `safe-outputs.concurrency-group` keyed on the
+resolved branch, so two agents heading for the same PR branch never race on the
+push (user stories 13, 20). gh-aw's default per-issue workflow group additionally
+prevents the same issue being dispatched twice.
+
+> **v1 scope notes.** The `workflow_dispatch` entry point takes a single
+> `issue_number` (a manual re-check / test trigger); the batch sweep over all
+> open, unblocked `afk` issues (spec #77, user story 9) is a later addition. And
+> because a GitHub concurrency group is a mutex, the repo-wide cap is effectively
+> **one** run — excess runs **queue** rather than skip-and-stay-`afk`; a true
+> N-slot cap is future work.
+

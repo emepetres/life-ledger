@@ -30,3 +30,5 @@ Makefile   text
 *.jpg binary
 *.ico binary
 *.gz  binary
+
+.github/workflows/*.lock.yml linguist-generated=true merge=ours
