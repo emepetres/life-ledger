@@ -83,16 +83,16 @@ engines is a config change, not a code change.
 
 **Production** (v1, `engine: copilot` BYOK):
 
-- [ ] **`LLM_API_KEY`** — the API key for the **OpenAI-compatible endpoint**.
+- [x] **`LLM_API_KEY`** — the API key for the **OpenAI-compatible endpoint**.
       Mapped to `COPILOT_PROVIDER_API_KEY` in the workflow's `engine.env` block.
       Injected into the **agent job only**, so a leak's blast radius is one
       read-only job — and under BYOK gh-aw isolates the real credential in its
       API-proxy sidecar, so the agent process never sees it.
-- [ ] **`LLM_BASE_URL`** — the provider base URL. Mapped to
+- [x] **`LLM_BASE_URL`** — the provider base URL. Mapped to
       `COPILOT_PROVIDER_BASE_URL`; its host must also appear in `network.allowed`.
       It lives as a secret so the endpoint can be swapped without editing the
       workflow.
-- [ ] **`LLM_MODEL`** — a repository **Actions variable** (not a secret;
+- [x] **`LLM_MODEL`** — a repository **Actions variable** (not a secret;
       Variables tab), the model the endpoint serves. Mapped to `COPILOT_MODEL` in
       `engine.env` as `${{ vars.LLM_MODEL }}` (required for most BYOK providers).
       A variable, not a literal, so switching model is a Settings change that
@@ -123,7 +123,7 @@ key onto the command line, where it would land in shell history.)
 
 ### Repo settings
 
-- [ ] **Enable "Allow GitHub Actions to create and approve pull requests."**
+- [x] **Enable "Allow GitHub Actions to create and approve pull requests."**
       Settings → Actions → General → Workflow permissions. This is **currently
       off**. While off, an `/implement` run cannot open a PR and silently
       degrades to posting an issue comment instead — the run looks like it
@@ -132,13 +132,43 @@ key onto the command line, where it would land in shell history.)
 
 ### Branch protection
 
-- [ ] **Confirm `main` branch protection requires human review.** Settings →
-      Branches → branch protection rule for `main`. This is the no-self-merge
-      gate: AFK PRs are draft-only and are never merged or self-approved by the
-      agent, so a required human review on `main` is what guarantees no
-      autonomous change reaches the default branch. Without it, the draft-only
-      convention is the *only* thing standing between an agent and `main` —
-      make it an enforced rule, not a convention.
+- [x] **Protect `main` so no change lands without a human merge.** This is the
+      no-self-merge gate: AFK PRs are draft-only and are never merged or
+      self-approved by the agent, so an enforced rule on `main` is what guarantees
+      no autonomous change reaches the default branch. Without it, the draft-only
+      convention is the *only* thing standing between an agent and `main` — make
+      it an enforced rule, not a convention.
+
+  **How to create the rule** (GitHub **Rulesets** — the current mechanism;
+  Settings → Rules → Rulesets → **New ruleset → New branch ruleset**):
+
+  1. **Name** it (e.g. `protect-main`) and set **Enforcement status: Active**.
+  2. **Target branches → Add target → Include default branch** (resolves to
+     `main`).
+  3. Under **Rules**, tick **Require a pull request before merging.** This alone
+     blocks direct pushes to `main`, so every change — including an AFK draft PR —
+     can only reach `main` through a merge that *you* click. Combined with the
+     three-job token split (the finalize job has no merge capability and PRs are
+     draft), the agent structurally cannot merge itself.
+  4. **Required approvals — read this before setting it.** GitHub does **not**
+     let you approve your *own* PR. As the **sole maintainer** you author the
+     merge, so setting required approvals ≥ 1 would also lock *you* out of merging
+     AFK PRs (there is no one else to approve). So:
+       - **Solo maintainer:** leave **Required approvals: 0**. The gate is the
+         mandatory-PR rule plus your manual **Merge** click — the agent never gets
+         that far because it only ever opens a *draft*.
+       - **If you ever add collaborators:** raise to **1** (and optionally enable
+         *Dismiss stale approvals* / *Require review from Code Owners*) so a second
+         human must approve.
+  5. Also tick **Block force pushes.**
+  6. **Bypass list: leave it empty.** Do **not** add the Actions/AFK workflow
+     token as a bypass actor — that would defeat the gate.
+  7. **Create.**
+
+  (The classic **Settings → Branches → Add branch protection rule** for `main`
+  works too — same knobs: *Require a pull request before merging*, approvals per
+  the caveat above, *Do not allow bypassing*. Rulesets are GitHub's newer,
+  recommended path.)
 
 ### Labels
 
