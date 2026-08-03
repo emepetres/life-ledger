@@ -38,12 +38,16 @@ v1 is deliberately the simplest thing that works:
   agent for one ready, unblocked issue. There is **no** autonomous graph
   traversal — newly-unblocked tickets are not auto-advanced. That is an
   explicit later feature.
-- **Engine-agnostic by construction.** v1 ships on `engine: claude` with a real
-  Anthropic key, but the secrets and skill-install paths are structured so the
-  same workflow runs under GitHub Copilot (BYOK to any OpenAI-compatible
-  endpoint), validated as the terminal ticket. The seam is the engine-neutral
-  secret pair `LLM_API_KEY` / `LLM_BASE_URL`, mapped per-engine in a small
-  `engine.env` block.
+- **Engine-agnostic by construction.** v1 ships on `engine: copilot` in **BYOK**
+  mode against an OpenAI-compatible endpoint (Anthropic direct API keys are not
+  provisionable under the maintainer's corporate account, so Copilot BYOK is the
+  simplest engine that runs on available credentials). The secrets and
+  skill-install paths are structured so the same workflow runs under a **second
+  engine** — validated under `engine: opencode` (GitHub-routed Copilot models via
+  `COPILOT_GITHUB_TOKEN`) as the terminal ticket, a genuinely distinct auth path.
+  The seam is the engine-neutral secret pair `LLM_API_KEY` / `LLM_BASE_URL`,
+  mapped per-engine in a small `engine.env` block (copilot →
+  `COPILOT_PROVIDER_API_KEY` / `COPILOT_PROVIDER_BASE_URL` + `COPILOT_PROVIDER_TYPE: openai`).
 - **Human gates preserved.** PRs are draft-only, prefixed `[afk] `, linked to
   their issue with `Part of #<n>` (never `Fixes`, so nothing auto-closes). The
   gate to `main` is always a human review plus branch protection.
@@ -77,21 +81,36 @@ Actions), not environment or organization secrets. The base URLs are stored as
 secrets too, so the whole provider binding lives in one place and switching
 engines is a config change, not a code change.
 
-**Production** (v1, `engine: claude`):
+**Production** (v1, `engine: copilot` BYOK):
 
-- [ ] **`LLM_API_KEY`** — the Anthropic API key. Mapped to `ANTHROPIC_API_KEY`
-      in the workflow's `engine.env` block. Injected into the **agent job only**,
-      so a leak's blast radius is one read-only job.
-- [ ] **`LLM_BASE_URL`** — the provider base URL. For direct Anthropic this is
-      `https://api.anthropic.com`; it exists as a secret so a proxy or an
-      OpenAI-compatible endpoint can be swapped in without editing the workflow.
+- [ ] **`LLM_API_KEY`** — the API key for the **OpenAI-compatible endpoint**.
+      Mapped to `COPILOT_PROVIDER_API_KEY` in the workflow's `engine.env` block.
+      Injected into the **agent job only**, so a leak's blast radius is one
+      read-only job — and under BYOK gh-aw isolates the real credential in its
+      API-proxy sidecar, so the agent process never sees it.
+- [ ] **`LLM_BASE_URL`** — the provider base URL. Mapped to
+      `COPILOT_PROVIDER_BASE_URL`; its host must also appear in `network.allowed`.
+      It lives as a secret so the endpoint can be swapped without editing the
+      workflow.
+- [ ] **`LLM_MODEL`** — a repository **Actions variable** (not a secret;
+      Variables tab), the model the endpoint serves. Mapped to `COPILOT_MODEL` in
+      `engine.env` as `${{ vars.LLM_MODEL }}` (required for most BYOK providers).
+      A variable, not a literal, so switching model is a Settings change that
+      resolves at runtime — no `.lock.yml` recompile. Set it with
+      `gh variable set LLM_MODEL --body "<model>"` (non-secret, safe on the command
+      line). `COPILOT_PROVIDER_TYPE: openai` stays a literal. This keeps the whole
+      per-engine binding to the neutral `LLM_*` names in a ~4-line `engine.env`.
 
-**Copilot validation** (terminal engine-agnostic ticket — distinct secrets keep
-the throwaway validation run fully isolated from production):
+**opencode validation** (terminal engine-agnostic ticket — a second, genuinely
+distinct auth path keeps the throwaway validation run fully isolated from
+production):
 
-- [ ] **`LLM_VALIDATION_API_KEY`** — the API key for the OpenAI-compatible
-      endpoint used to validate the Copilot + BYOK path.
-- [ ] **`LLM_VALIDATION_BASE_URL`** — the base URL of that validation endpoint.
+- [ ] **`COPILOT_GITHUB_TOKEN`** — a GitHub token with Copilot access (org
+      Copilot subscription), consumed by `engine: opencode` with
+      `model: copilot/<model>`. No OpenAI-compatible endpoint secret is involved,
+      so validation exercises a different credential path than production. (May
+      instead be satisfied by the `copilot-requests: write` permission on the
+      throwaway validation workflow — resolved when #87 is worked.)
 
 Set a secret with:
 
