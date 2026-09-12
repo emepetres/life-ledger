@@ -131,6 +131,7 @@ func (r *report) run() {
 	r.checkFSClass()
 	r.checkRawLocks()
 	r.checkSQLite()
+	r.checkDurability()
 	r.checkPersistence()
 }
 

@@ -23,7 +23,13 @@ records that Azure Files SMB failed exactly here.
 | **`journal_mode` is really `wal`** | WAL can be silently refused and fall back — a pass that hides a downgrade. |
 | **Two OS processes writing concurrently** | Proves locks *serialise* rather than interleave and lose writes. |
 | **`VACUUM INTO` + reopen + row-count match** | `internal/store`'s backup path is `VACUUM INTO`, not a file copy. |
-| **Persistence across runs** | Appends a boot-stamped record. Needs a **second run after a restart** — the only check one run cannot settle. |
+| **Persistence across runs** | Appends a boot-stamped record. Needs a **second run after a restart**. |
+| **Committed transactions survive power loss** | Keeps a database *across* runs and holds it to a ledger of acknowledged commits. Runs twice in parallel — `synchronous=NORMAL` (the app's current pragmas) and `synchronous=FULL` — so the result says which pragma the host needs. |
+
+The last two need a **second run after a restart**; nothing one run does can
+settle them. The durability check is the sharper of the pair: persistence only
+proves the filesystem kept an append-only text file, and a disk that lies about
+flushes will preserve that while losing committed SQLite transactions.
 
 It deliberately uses **`modernc.org/sqlite`**, not the `sqlite3` CLI: the #20
 failure was modernc's pure-Go locking implementation, and the C library takes a
@@ -39,10 +45,12 @@ not merely good ones:
 | ext4 | `0xef53` local | all pass | **PASS** (incl. cross-boot persistence) |
 | `/dev/shm` tmpfs | `0x1021994` ephemeral | **all pass** | **FAIL** — ephemeral |
 | `/mnt/c` 9p drvfs | `0x1021997` foreign | **all pass** | **FAIL** — non-POSIX lock backend |
+| ext4, durable db deleted between runs | `0xef53` local | all pass | **FAIL** — acknowledged commits vanished |
 
-The last two matter most: every lock-level check passes and the verdict is still
-FAIL. `/mnt/c` is the dev-parity trap reproduced — a Windows-backed filesystem
-sailing through every SQLite check.
+The bottom three matter most: every lock-level check passes and the verdict is
+still FAIL. `/mnt/c` is the dev-parity trap reproduced — a Windows-backed
+filesystem sailing through every SQLite check. The last row simulates a host that
+loses committed data, which is the failure no single run can see.
 
 ## Build
 
@@ -126,11 +134,20 @@ a real block device, the separate Block Volume may be unnecessary.
 
 ### Home mini-PC (Proxmox)
 
-`amd64`. Same two-run shape, with the reboot being the real value here: per
+`amd64`. Same two-run shape, with the power-cut being the real value here: per
 [#94](https://github.com/emepetres/life-ledger/issues/94) this box takes an
-**unclean power loss 1–2×/yr**, so run the second pass after a hard power-cut of
-the VM (Proxmox *Stop*, not *Shutdown*) rather than a clean reboot. That is the
-failure mode the host actually has.
+**unclean power loss 1–2×/yr**, so run the second pass after a hard cut (Proxmox
+*Stop*, not *Shutdown*) rather than a clean reboot. That is the failure mode the
+host actually has, and it is what the durability check is built to judge.
+
+**Probe the guest, not the hypervisor host.** A run on the Proxmox host measures
+`pve-root`; the app will live on a thin-LV in `pve-data`, a different filesystem
+stack on the same physical disk. Results so far:
+
+| Target | Result |
+| --- | --- |
+| Proxmox host, `/var/lib/life-ledger` on `pve-root` ext4-on-LVM | **PASS** across a real power cut — baseline for the box |
+| LXC/VM guest on `pve-data` thin-LV | **not yet probed — this is the number that counts** |
 
 ### Vercel — nothing to probe
 
