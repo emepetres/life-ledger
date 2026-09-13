@@ -85,34 +85,48 @@ Each host needs **two runs with a restart in between**. The first run reports
 
 ### Fly.io
 
-```pwsh
-fly launch --no-deploy --name lockprobe-ll --region ams
-fly volumes create probedata --region ams --size 1 --yes
-```
+`fly.toml` here is ready to use, and declares **no services** — with nothing to
+serve, Fly applies no health checks and never autostops the machine, so it stays
+up between runs.
 
-Add to `fly.toml`, and disable autostop so the machine does not vanish:
-
-```toml
-[[mounts]]
-  source      = "probedata"
-  destination = "/data"
-
-[[services]]
-  auto_stop_machines  = false
-  auto_start_machines = false
-```
+Run everything from the **repo root**: the Dockerfile's build context is the
+module, not this directory.
 
 ```pwsh
-fly deploy --dockerfile prototypes/lockprobe/Dockerfile
-fly logs                      # first report
+fly auth login
+fly apps create lockprobe-ll
+fly volumes create probedata --region ams --size 1 --app lockprobe-ll --yes
+fly deploy --config prototypes/lockprobe/fly.toml
+fly logs                                          # run 1 — baseline
+```
+
+Then drive the durability cycle over SSH (this is why the image is alpine, not
+`scratch` — `scratch` has no shell to land in):
+
+```pwsh
+fly ssh console -C "/lockprobe -dir /data -arm"
+fly machine list                                  # note the id
 fly machine restart <id>
-fly logs                      # second report — persistence
-fly apps destroy lockprobe-ll ; fly volumes destroy <vol-id>
+fly ssh console -C "/lockprobe -dir /data"        # run 2 — the verdict
 ```
 
-Fly is the only shortlisted managed host documenting its volume as a local NVMe
-slice on the machine's own physical host, so it is expected to pass — the run
-confirms it rather than discovering it.
+**Prefer an ungraceful stop if your flyctl offers one** (`fly machine --help` —
+look for a kill or `--signal SIGKILL` variant). A clean restart lets SQLite
+close tidily and exercises nothing; an abrupt kill is what forces WAL recovery.
+A clean restart still settles persistence, just not durability.
+
+Watch the **hostname and boot id** in the report across runs. Fly can move a
+machine to a different physical host, and a changed hostname alongside surviving
+data is a stronger persistence result than a same-host restart — while data that
+vanishes after a move is exactly the failure #91 flagged when it noted Fly
+volumes are **unreplicated**.
+
+Tear down when finished, and confirm the volume actually went:
+
+```pwsh
+fly apps destroy lockprobe-ll
+fly volumes list --app lockprobe-ll
+```
 
 ### Railway
 

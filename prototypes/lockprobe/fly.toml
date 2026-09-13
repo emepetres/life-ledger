@@ -1,0 +1,23 @@
+# THROWAWAY — wayfinder ticket #96. Destroy the app when the probe is done.
+#
+# Deliberately declares NO services: with nothing to serve, Fly never applies
+# health checks and never autostops the machine, so it stays up between the
+# arm and verify runs. The probe is not a web app and must not look like one.
+
+app            = "lockprobe-ll"
+primary_region = "ams"
+
+[build]
+  dockerfile = "prototypes/lockprobe/Dockerfile"
+
+# The whole point of the exercise: a real Fly Volume, mounted where the app's
+# LIFELEDGER_DB_PATH parent would be. #91 found Fly is the only managed
+# candidate documenting this as a local NVMe slice on the machine's own
+# physical host — this is what checks that claim.
+[[mounts]]
+  source      = "probedata"
+  destination = "/data"
+
+[[vm]]
+  size   = "shared-cpu-1x"
+  memory = "256mb"
