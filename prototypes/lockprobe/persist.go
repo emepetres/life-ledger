@@ -27,15 +27,21 @@ func (r *report) checkPersistence() {
 	path := filepath.Join(r.dir, runsName)
 
 	var prior []runRecord
+	corrupt := 0
 	if raw, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 			if line == "" {
 				continue
 			}
 			var rec runRecord
-			if json.Unmarshal([]byte(line), &rec) == nil {
-				prior = append(prior, rec)
+			// An unreadable record is evidence, not noise: an unclean shutdown
+			// NUL-pads un-fsynced appends, and skipping them quietly is how a
+			// real loss goes unnoticed.
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				corrupt++
+				continue
 			}
+			prior = append(prior, rec)
 		}
 	} else if !os.IsNotExist(err) {
 		r.fail(name, false, "reading %s: %v", runsName, err)
@@ -52,6 +58,11 @@ func (r *report) checkPersistence() {
 	}
 	_, _ = f.Write(append(line, '\n'))
 	_ = f.Close()
+
+	if corrupt > 0 {
+		r.fail("this run ledger survived intact", false,
+			"%d unreadable record(s) in %s — NUL-padded or truncated by an unclean shutdown. Inspect with `cat -A`", corrupt, runsName)
+	}
 
 	if len(prior) == 0 {
 		r.fail(name, false, "FIRST RUN — nothing to compare against yet. Restart, redeploy or move the machine, then run the probe again; this is the only check that needs a second run.")
