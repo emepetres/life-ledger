@@ -60,6 +60,7 @@ func main() {
 	var (
 		dir      = flag.String("dir", envOr("LOCKPROBE_DIR", "/data"), "mounted volume directory to probe")
 		hold     = flag.Bool("hold", false, "stay alive after reporting (keeps the container running)")
+		arm      = flag.Bool("arm", false, "commit rows and exit immediately, so power can be cut seconds later (see armBanner)")
 		tryLock  = flag.String("try-lock", "", "internal: child mode, attempt to take the lock and exit with a code")
 		writerID = flag.String("writer", "", "internal: child mode, hammer inserts into this db as a second process")
 	)
@@ -76,6 +77,10 @@ func main() {
 	}
 
 	r := &report{dir: *dir}
+	if *arm {
+		r.arm()
+		return
+	}
 	r.run()
 	r.print()
 
@@ -104,6 +109,7 @@ type report struct {
 	facts   []string
 	checks  []check
 	fsClass string
+	armMode bool
 	aborted string
 }
 
@@ -117,6 +123,37 @@ func (r *report) pass(name, detail string, args ...any) {
 
 func (r *report) fail(name string, fatal bool, detail string, args ...any) {
 	r.checks = append(r.checks, check{name: name, fatal: fatal, detail: fmt.Sprintf(detail, args...)})
+}
+
+// arm exists because a power cut minutes after a commit tests almost nothing:
+// Linux flushes dirty pages within ~30s regardless of pragma, so the data is on
+// disk either way and synchronous=NORMAL is never stressed. Its documented
+// hazard — the WAL not being fsynced until checkpoint — only bites when power
+// dies SECONDS after a commit that already returned.
+//
+// So this mode does the durability append and nothing else, then gets out of
+// the way, leaving the shortest possible window between "commit acknowledged"
+// and the cut. Verify with an ordinary run after the machine comes back.
+func (r *report) arm() {
+	if err := os.MkdirAll(r.dir, 0o755); err != nil {
+		fmt.Printf("cannot create probe dir %s: %v\n", r.dir, err)
+		os.Exit(1)
+	}
+	r.armMode = true
+	r.gatherFacts()
+	r.checkDurability()
+	r.print()
+	fmt.Printf(`
+  ################################################################
+  #  ARMED at %s
+  #
+  #  Commits are acknowledged and this process has exited.
+  #  CUT THE POWER NOW — within a few seconds, not minutes.
+  #  A clean shutdown, or a delay, tests nothing.
+  #
+  #  When it comes back, run the probe normally to get the verdict.
+  ################################################################
+`, time.Now().UTC().Format(time.RFC3339))
 }
 
 func (r *report) run() {

@@ -105,6 +105,13 @@ func (r *report) print() {
 	}
 
 	fmt.Println()
+	if r.armMode {
+		// Only the durability checks ran; a full verdict here would overstate it.
+		if fatal > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 	switch {
 	case fatal > 0:
 		fmt.Printf("  VERDICT: FAIL — %d disqualifying failure(s). This host cannot hold the SQLite file.\n", fatal)

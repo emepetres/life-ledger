@@ -72,6 +72,9 @@ is `amd64`, including the mini-PC's N95.
   Restart the machine and run again.
 - **`VERDICT: FAIL`** — at least one disqualifying failure. **Strike the host.**
 
+`-arm` prints no verdict at all: only the durability checks run under it, so a
+summary line would overstate what was tested.
+
 Capture the *whole* report per host, including the facts block: the
 `/proc/mounts` line and `f_type` are the raw evidence #96 asks for.
 
@@ -146,8 +149,30 @@ stack on the same physical disk. Results so far:
 
 | Target | Result |
 | --- | --- |
-| Proxmox host, `/var/lib/life-ledger` on `pve-root` ext4-on-LVM | **PASS** across a real power cut — baseline for the box |
-| LXC/VM guest on `pve-data` thin-LV | **not yet probed — this is the number that counts** |
+| Proxmox host, `pve-root` ext4-on-LVM | **PASS** across a real power cut, both pragmas |
+| Unprivileged LXC 101, `pve-vm--101--disk--0` thin-LV | **PASS** on storage; durability baseline laid, cut pending |
+
+The guest and host are indistinguishable — same `f_type`, same lock behaviour,
+`CREATE TABLE` at 23–24 ms on both. **LVM thin provisioning adds no observable
+penalty**, which takes storage safety out of the LXC-vs-VM question entirely.
+
+#### Arm the durability check before cutting power
+
+A cut *minutes* after a commit tests almost nothing: Linux flushes dirty pages
+within ~30 s regardless of pragma, so the data is on disk either way and
+`synchronous=NORMAL` is never stressed. Its documented hazard — the WAL not
+fsynced until checkpoint — only bites when power dies **seconds** after a commit
+that already returned.
+
+```pwsh
+/root/lockprobe -dir /var/lib/life-ledger -arm            # host
+pct exec 101 -- /root/lockprobe -dir /var/lib/life-ledger -arm   # guest
+# then pull the plug within seconds, NOT minutes
+```
+
+`-arm` does the durability append and nothing else, then exits, leaving the
+shortest possible window before the cut. Verify with an ordinary run once the
+machine is back.
 
 ### Vercel — nothing to probe
 
