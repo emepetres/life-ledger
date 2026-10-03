@@ -1,8 +1,12 @@
 # Persistence & storage design
 
+**Status:** partially superseded by [ADR-0012](0012-storage-durability-on-the-box.md) — the storage mechanism (ephemeral `EmptyDir` + backup-on-write to Blob + restore-on-boot). SQLite, the driver, migrations, table shape, pragmas and DB location still hold.
+
 Expenses are persisted in **SQLite**, accessed from Go through the pure-Go **`modernc.org/sqlite`** driver, with the schema created and evolved by **versioned migrations embedded in the binary**. The database is a single file on disk; on Azure Container Apps that file lives on a **replica-scoped ephemeral volume (`EmptyDir`)**, backed up to Azure Blob after each write.
 
 ## Storage mechanism
+
+> **Superseded by [ADR-0012](0012-storage-durability-on-the-box.md).** On the home mini-PC the DB lives on persistent local ext4 and the app has no backup role.
 
 SQLite, one file. It honours every standing preference for this effort — single deployable unit, cheap, splittypie-simple, trivially runnable locally — and the app's load profile (one user, a handful of writes a day) never touches SQLite's concurrency limits.
 
