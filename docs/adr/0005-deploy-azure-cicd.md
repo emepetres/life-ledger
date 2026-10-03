@@ -1,5 +1,7 @@
 # Deploy to Azure Container Apps via Bicep + GitHub Actions
 
+**Status:** superseded by [ADR-0010](0010-host-home-mini-pc.md) — Life Ledger leaves Azure for the home mini-PC.
+
 Life Ledger is deployed to **Azure Container Apps** (ACA) in **West Europe**, provisioned by **Bicep** in `infra/` and shipped by **GitHub Actions**. Earlier ADRs settled the runtime shape (Go static binary on ACA, SQLite on a **replica-scoped ephemeral `EmptyDir` volume backed up to Azure Blob after each write and restored on boot** — [ADR-0003](0003-persistence-and-storage.md); in-app auth — [ADR-0004](0004-access-model-auth.md)) but explicitly deferred *deployment*. This ADR closes that gap. The end-to-end topology lives in [docs/architecture.md](../architecture.md); this records the decisions and the trade-offs behind them.
 
 ## Decisions

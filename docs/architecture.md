@@ -233,10 +233,11 @@ flowchart LR
 - [ADR-0002](adr/0002-free-text-entry-syntax.md) — free-text entry syntax
 - [ADR-0003](adr/0003-persistence-and-storage.md) — persistence & storage (SQLite)
 - [ADR-0004](adr/0004-access-model-auth.md) — access model / auth
-- [ADR-0005](adr/0005-deploy-azure-cicd.md) — deploy to Azure via Bicep + GitHub Actions
-- [ADR-0006](adr/0006-user-assigned-identity-for-acr-pull.md) — user-assigned identity for ACR pull
+- [ADR-0005](adr/0005-deploy-azure-cicd.md) — deploy to Azure via Bicep + GitHub Actions *(superseded by ADR-0010)*
+- [ADR-0006](adr/0006-user-assigned-identity-for-acr-pull.md) — user-assigned identity for ACR pull *(superseded by ADR-0010)*
 - [ADR-0007](adr/0007-scheduled-retained-backup.md) — scheduled retained backup + restore runbook
 - [ADR-0008](adr/0008-canonical-entry-line-edit.md) — canonical entry line on edit; edits capped at 12 months
 - [ADR-0009](adr/0009-income-and-paybacks.md) — income & paybacks: record shape, entry syntax, net cost
+- [ADR-0010](adr/0010-host-home-mini-pc.md) — host on the home mini-PC (leaving Azure); best-effort availability, near-zero RPO, portability invariant
 
 Operational runbooks live in [docs/deployment/](deployment/): [first-deploy.md](deployment/first-deploy.md) and [restore-runbook.md](deployment/restore-runbook.md).
