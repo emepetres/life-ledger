@@ -24,11 +24,34 @@ deploy/minipc/
   guest/life-ledger.service    # the app (DynamicUser, ProtectSystem=strict)
   guest/cloudflared.service    # the tunnel (token from its own env file)
   guest/life-ledger-update.*   # 5-min digest poll, swap, /health check, rollback
+  guest/life-ledger-backup.*   # nightly VACUUM INTO -> gate -> Google Drive (rclone)
 ```
 
 In the guest: binary `/opt/life-ledger/life-ledger`, DB
-`/var/lib/life-ledger/expenses.db`, root-only env files
-`/etc/life-ledger/app.env` and `/etc/life-ledger/cloudflared.env`.
+`/var/lib/life-ledger/expenses.db`, root-only files `/etc/life-ledger/app.env`,
+`/etc/life-ledger/cloudflared.env`, `/etc/life-ledger/rclone.conf` and
+`/etc/life-ledger/backup.env`.
+
+## What only you can do
+
+Everything else in this runbook is scripted. These steps need a human (a browser,
+a password, an account), in this order:
+
+| # | Step | Where | Ticket |
+| --- | --- | --- | --- |
+| 1 | Run `create-guest.sh` on the Proxmox host (type the host password at the `ssh`/`scp` prompts; no key is set up) | step 1 | [#103](https://github.com/emepetres/life-ledger/issues/103), done |
+| 2 | Create the Cloudflare tunnel, copy its token into `.env` and `cloudflared.env` | step 3 | [#103](https://github.com/emepetres/life-ledger/issues/103), done |
+| 3 | Make the GHCR package public | step 5 | [#103](https://github.com/emepetres/life-ledger/issues/103), done |
+| 4 | Create the Google OAuth client (**In production**, scope `drive.file`) | step 7a | [#104](https://github.com/emepetres/life-ledger/issues/104) |
+| 5 | Authorise rclone in your browser, ship `rclone.conf` to the guest | step 7b | [#104](https://github.com/emepetres/life-ledger/issues/104) |
+| 6 | Create the healthchecks.io check, put the ping URL on the guest | step 7c | [#104](https://github.com/emepetres/life-ledger/issues/104) |
+| 7 | Store every secret in the password manager | step 7d | [#104](https://github.com/emepetres/life-ledger/issues/104) |
+| 8 | Restore `data/` into the guest **before the first real start** | restore step | map, not yet written |
+| 9 | Pull the plug once (real power-cut test) | step 6 | [#103](https://github.com/emepetres/life-ledger/issues/103), open |
+
+The agent cannot run anything on the box unattended: SSH there is
+password-only. Either type the password when prompted, or install your key once
+(`ssh-copy-id root@192.168.1.167`) so the agent can drive the box.
 
 ## Facts about the host
 
@@ -97,8 +120,8 @@ TUNNEL_TOKEN=<tunnel token>
 
 The tunnel token has its own file so the app process never sees it. The listen
 address, secure-cookie flag, DB path and timezone are set in the unit, not here.
-There are **no backup keys** (the backup is a separate box-side job,
-[#104](https://github.com/emepetres/life-ledger/issues/104)).
+There are **no backup keys** here: the backup is a separate box-side job with its
+own files (step 7).
 
 ## 3. Cloudflare Tunnel (dashboard, by hand)
 
@@ -178,3 +201,180 @@ retried). Rollback was tested with a stub `crane` in the guest.
       one is restored and the digest is not retried.
 - [ ] **Real power cut (not performed when #103 was closed):** pull the plug, restore power, touch nothing. HA, the
       guest, the app and the tunnel all come back and the phone login works again.
+
+## 7. Nightly offsite backup (Google Drive)
+
+Decided in [#99](https://github.com/emepetres/life-ledger/issues/99): a box-side
+job, no app code. `life-ledger-backup.timer` fires at 03:00 Europe/Madrid
+(`Persistent=true`, so a night lost to a power cut runs on boot).
+`life-ledger-backup` does:
+
+1. `sqlite3 ... "VACUUM INTO"` a snapshot, as the app's own dynamic user
+   (`User=life-ledger` + `DynamicUser=yes` resolves to the same uid as the app, so
+   no root-owned `-wal`/`-shm` files can appear next to the DB).
+2. **Gate:** `PRAGMA integrity_check` = `ok` and `goose_db_version` >= 1. A trip
+   means no upload, no prune, and a `/fail` ping.
+3. `rclone copyto` to `daily/YYYY-MM-DD.db`, plus `monthly/YYYY-MM.db` on the 1st,
+   labelled by the month that just ended.
+4. `rclone delete --min-age 7d daily/`. Month-ends are kept forever.
+5. Ping healthchecks.io. A missed night, or a `/fail`, emails you.
+
+The bootstrap installs a pinned, SHA-256-verified `rclone`, `sqlite3`, the script
+(`/usr/local/sbin/life-ledger-backup`) and both units, but **does not enable the
+timer**: it needs the two files below first. The bootstrap is idempotent, so on
+the existing guest, copy `deploy/minipc/` to the host again (step 1) and
+re-bootstrap *without* recreating the CT:
+
+```bash
+# On the Proxmox host
+tar -C /root/minipc/guest -czf /tmp/life-ledger-guest.tgz .
+pct push 101 /tmp/life-ledger-guest.tgz /root/guest.tgz
+pct exec 101 -- bash -c 'rm -rf /root/guest && mkdir /root/guest && tar -xzf /root/guest.tgz -C /root/guest && bash /root/guest/bootstrap.sh'
+```
+
+### 7a. Google OAuth client (browser, once)
+
+1. <https://console.cloud.google.com> → create a project (e.g. `life-ledger`).
+2. **APIs & Services → Library → Google Drive API → Enable.**
+3. **OAuth consent screen / Google Auth Platform:** user type **External**, app name
+   `Life Ledger backup`, your e-mail as support and developer contact. Add the
+   scope `.../auth/drive.file`. Add yourself as a test user.
+4. **Audience → Publish app → In production.** Google may say the app is
+   unverified: that is fine for personal use. Skipping this leaves it in *Testing*,
+   where refresh tokens **expire after 7 days** and the backup silently dies.
+5. **Clients → Create client → Desktop app.** Copy the **client ID** and **client
+   secret**.
+
+### 7b. Authorise rclone on your machine, ship the config
+
+A headless box cannot open a browser, so authorise on the dev machine and copy the
+result. `winget install Rclone.Rclone` if needed.
+
+```pwsh
+rclone config
+# n (new remote)  name: gdrive   storage: drive
+# client_id / client_secret: the ones from 7a
+# scope: 3 (drive.file)   root_folder_id: <blank>   service_account_file: <blank>
+# Edit advanced config: n   Use auto config: y  -> sign in in the browser, "Allow"
+# Configure as Shared Drive: n   keep this remote: y
+rclone config file          # prints the rclone.conf path
+rclone lsd gdrive:          # must not error (it will look empty: drive.file)
+```
+
+The remote **must be named `gdrive`** (the unit says `gdrive:life-ledger`).
+Then send only that remote to the guest, via the Proxmox host (the guest accepts
+no inbound connections):
+
+```pwsh
+$conf = rclone config file | Select-Object -Last 1
+scp $conf root@192.168.1.167:/root/rclone.conf
+ssh root@192.168.1.167 "pct push 101 /root/rclone.conf /etc/life-ledger/rclone.conf --perms 0600 && shred -u /root/rclone.conf"
+```
+
+If your `rclone.conf` holds other remotes, trim it to the `[gdrive]` section first.
+
+### 7c. healthchecks.io
+
+1. Sign up at <https://healthchecks.io> (free), create a check `life-ledger-backup`:
+   **period 1 day, grace time 6 hours**, with your e-mail as the integration.
+2. Copy its **ping URL** (`https://hc-ping.com/<uuid>`). The script appends
+   `/start` and `/fail` to it.
+3. Put it on the guest:
+
+```bash
+# On the Proxmox host
+pct exec 101 -- bash -c 'umask 077; read -rp "ping URL: " u; echo "HEALTHCHECK_URL=$u" >/etc/life-ledger/backup.env'
+```
+
+### 7d. Password manager
+
+Store, as canonical copies (ADR-0011): the contents of `rclone.conf`, the OAuth
+client ID/secret, and the ping URL. The box holds deployment copies only.
+
+### 7e. Enable and test
+
+```bash
+# In the guest
+systemctl enable --now life-ledger-backup.timer
+systemctl start life-ledger-backup.service        # a real run
+journalctl -u life-ledger-backup -n 30            # "backup ok: daily/<date>.db"
+systemctl list-timers life-ledger-backup.timer    # next run ~03:00
+```
+
+Check, in order:
+
+- [ ] Drive has `life-ledger/daily/<today>.db` (the first of each month also
+      `monthly/`). Look in the Drive web UI: files created by rclone are visible.
+- [ ] healthchecks.io shows the check **up** with a fresh ping.
+- [ ] **Forced gate failure** emails you. An empty file has no `goose_db_version`:
+
+```bash
+# In the guest. Same sandbox as the unit, but pointed at an empty DB.
+touch /var/lib/life-ledger/empty.db
+systemd-run --wait --collect -P -p User=life-ledger -p DynamicUser=yes \
+  -p StateDirectory=life-ledger -p RuntimeDirectory=life-ledger-backup \
+  -p LoadCredential=rclone.conf:/etc/life-ledger/rclone.conf \
+  -p EnvironmentFile=/etc/life-ledger/backup.env \
+  -p Environment=DB_PATH=/var/lib/life-ledger/empty.db \
+  -p Environment=BACKUP_REMOTE=gdrive:life-ledger \
+  /usr/local/sbin/life-ledger-backup || echo "failed as expected"
+rm /var/lib/life-ledger/empty.db
+```
+
+- [ ] **A snapshot restores.** Download one and check it:
+
+```bash
+# In the guest, as root
+RCLONE_CONFIG=/etc/life-ledger/rclone.conf rclone copyto \
+  gdrive:life-ledger/daily/$(date +%F).db /root/restore-test.db
+sqlite3 /root/restore-test.db 'PRAGMA integrity_check; SELECT MAX(version_id) FROM goose_db_version;'
+rm /root/restore-test.db
+```
+
+### Accepted risks (from #99)
+
+Unencrypted: a compromise of the Google account or of the box's `drive.file`
+token exposes the full history. RPO is up to 24h (amends ADR-0010). `age`
+encryption is the planned upgrade; the gate already runs producer-side so it slots
+in unchanged.
+
+### Verified 2026-10-04
+
+Timer enabled (next run 03:00 Madrid). A real run uploaded `daily/<date>.db`; a
+downloaded snapshot passed `integrity_check`; a forced gate failure sent the
+`/fail` ping and emailed the dev; healthchecks.io showed the check up.
+
+## 8. Restore the real database
+
+Done 2026-10-04 from the old Azure copy (`ledgerbackup/expenses.db`, 2026-09-12,
+85 expenses and 8 incomes, goose version 2). The repo's local `data/expenses.db`
+was **older** (July): check file dates before choosing the source.
+
+The app must be **stopped** during the swap, and the placeholder's `-wal`/`-shm`
+files must go with it. The guest's DB path is a symlink into
+`/var/lib/private/life-ledger` (`DynamicUser`); the file must be owned by the
+app's dynamic uid, which `stat -c %u /var/lib/private/life-ledger` shows.
+
+```bash
+# On the Proxmox host, after `scp expenses.db root@192.168.1.167:/root/restore.db`
+pct push 101 /root/restore.db /root/restore.db && rm /root/restore.db
+pct exec 101 -- bash -c '
+  set -e
+  sqlite3 /root/restore.db "PRAGMA integrity_check; SELECT MAX(version_id) FROM goose_db_version"
+  cd /var/lib/private/life-ledger
+  uid=$(stat -c %u .)
+  systemctl stop life-ledger
+  rm -f expenses.db expenses.db-wal expenses.db-shm
+  install -o "$uid" -g "$uid" -m 0644 /root/restore.db expenses.db
+  rm /root/restore.db
+  systemctl start life-ledger; sleep 4
+  curl -fsS http://127.0.0.1:8080/health'
+```
+
+Then run `systemctl start life-ledger-backup.service` so Drive holds the real data
+(it overwrites the same-day placeholder snapshot), and check the data in the UI.
+
+Old snapshots: only the **monthly** ones (`2026-07`, `2026-08`) were uploaded to
+`gdrive:life-ledger/monthly/` (`rclone copy`, which keeps modification times).
+The old dailies (2026-09-06..12) were **not** uploaded: they are older than 7 days,
+so the next run's prune would delete them. They stay in the local archive.

@@ -1,0 +1,31 @@
+[Unit]
+Description=Life Ledger nightly offsite backup (SQLite snapshot to Google Drive)
+After=network-online.target
+Wants=network-online.target
+AssertPathExists=/etc/life-ledger/rclone.conf
+AssertPathExists=/etc/life-ledger/backup.env
+
+[Service]
+Type=oneshot
+# Same name as the app's implicit dynamic user (life-ledger.service), so both
+# resolve to the same uid and can share /var/lib/life-ledger.
+User=life-ledger
+DynamicUser=yes
+StateDirectory=life-ledger
+RuntimeDirectory=life-ledger-backup
+LoadCredential=rclone.conf:/etc/life-ledger/rclone.conf
+EnvironmentFile=/etc/life-ledger/backup.env
+Environment=DB_PATH=/var/lib/life-ledger/expenses.db
+Environment=BACKUP_REMOTE=gdrive:life-ledger
+Environment=TZ=Europe/Madrid
+ExecStart=/usr/local/sbin/life-ledger-backup
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native

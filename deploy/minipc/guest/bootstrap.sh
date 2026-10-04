@@ -7,10 +7,12 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 CRANE_VERSION=v0.22.1
 CRANE_SHA256=0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+RCLONE_VERSION=v1.75.1
+RCLONE_DEB_SHA256=09c9f7606ed9e31eecc1eec26a89992cf2931a8d2d1a5f0ae2bb1c11630ffb15
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl tar unattended-upgrades needrestart
+apt-get install -y -qq ca-certificates curl tar sqlite3 unattended-upgrades needrestart
 
 # --- cloudflared from Cloudflare's apt repo (ADR-0013), patched unattended -----
 install -d -m 0755 /usr/share/keyrings
@@ -40,6 +42,16 @@ if ! /usr/local/bin/crane version 2>/dev/null | grep -q "${CRANE_VERSION#v}"; th
   rm -rf "$tmp"
 fi
 
+# --- rclone for the offsite backup (#104), pinned and checksum-verified --------
+if ! rclone version 2>/dev/null | head -1 | grep -q "rclone $RCLONE_VERSION\$"; then
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/rclone.deb" \
+    "https://downloads.rclone.org/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.deb"
+  echo "$RCLONE_DEB_SHA256  $tmp/rclone.deb" | sha256sum -c -
+  apt-get install -y -qq "$tmp/rclone.deb"
+  rm -rf "$tmp"
+fi
+
 # --- directories and root-only env files ---------------------------------------
 install -d -m 0755 /opt/life-ledger
 install -d -m 0755 /var/lib/life-ledger          # DB lives here; restored before first start
@@ -51,9 +63,13 @@ done
 
 # --- units and updater ---------------------------------------------------------
 install -m 0755 "$here/life-ledger-update.sh" /usr/local/sbin/life-ledger-update
-for u in life-ledger.service cloudflared.service life-ledger-update.service life-ledger-update.timer; do
+install -m 0755 "$here/life-ledger-backup.sh" /usr/local/sbin/life-ledger-backup
+for u in life-ledger.service cloudflared.service life-ledger-update.service life-ledger-update.timer \
+         life-ledger-backup.service life-ledger-backup.timer; do
   install -m 0644 "$here/$u" "/etc/systemd/system/$u"
 done
 systemctl daemon-reload
 systemctl enable life-ledger.service cloudflared.service life-ledger-update.timer >/dev/null
+# life-ledger-backup.timer is NOT enabled here: it needs rclone.conf and
+# backup.env first (runbook step 7), otherwise it would fail every night.
 echo "bootstrap done"
