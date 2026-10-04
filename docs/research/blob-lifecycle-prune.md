@@ -1,5 +1,7 @@
 # Can Blob lifecycle management express the 7-day daily prune?
 
+> **Historical:** the Azure host is gone ([ADR-0010](../adr/0010-host-home-mini-pc.md)). Kept as history; nothing here describes the live system.
+
 Research for [issue #33](https://github.com/emepetres/life-ledger/issues/33), under map
 [#31](https://github.com/emepetres/life-ledger/issues/31) (scheduled retained backup of the blob
 database). **Advisory** input to the ADR and implementation spec — this document establishes what
@@ -297,7 +299,7 @@ live `expenses.db` left at the container root. The lifecycle rule then only ever
 
 **Permissions: none new.** This is a control-plane resource, deployed by `infra.yml` with the same
 OIDC identity that already holds `Contributor` + `User Access Administrator` on the resource group
-([first-deploy.md](../deployment/first-deploy.md)). **Cost: none.** *"Lifecycle management policies
+(`first-deploy.md` (since deleted)). **Cost: none.** *"Lifecycle management policies
 are free of charge. … Delete operations are free."*
 
 Verification after a deploy (the policy resource, not its effect — see §3):
@@ -433,4 +435,4 @@ All Microsoft Learn, retrieved 2026-07-25:
 Repo context: [ADR-0003](../adr/0003-persistence-and-storage.md),
 [`internal/blobbackup/blobbackup.go`](../../internal/blobbackup/blobbackup.go),
 [`infra/main.bicep`](../../infra/main.bicep),
-[`docs/deployment/first-deploy.md`](../deployment/first-deploy.md).
+`docs/deployment/first-deploy.md` (since deleted).

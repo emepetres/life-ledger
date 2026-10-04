@@ -36,7 +36,7 @@ func (s *Store) CreateIncome(ctx context.Context, i *expense.Income) error {
 	i.ID = id
 	i.CreatedAt = now
 	i.UpdatedAt = now
-	return s.backupAfterWrite(ctx)
+	return nil
 }
 
 // ListIncomes returns every stored income — both linked paybacks and standalone
@@ -104,7 +104,7 @@ func (s *Store) UpdateIncome(ctx context.Context, i *expense.Income) error {
 		return ErrNotFound
 	}
 	i.UpdatedAt = now
-	return s.backupAfterWrite(ctx)
+	return nil
 }
 
 // DeleteIncome removes the income with the given id, returning ErrNotFound if
@@ -122,7 +122,7 @@ func (s *Store) DeleteIncome(ctx context.Context, id int64) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	return s.backupAfterWrite(ctx)
+	return nil
 }
 
 // scanIncome reads one row into an Income, translating SQLite's representation

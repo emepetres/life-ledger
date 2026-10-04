@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// AC: WAL and foreign_keys=ON pragmas are set on every connection open.
+// AC: WAL, foreign_keys=ON and synchronous=FULL pragmas are set on every connection open.
 func TestPragmasSetOnConnection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data", "expenses.db")
 	s, err := Open(path)
@@ -36,5 +36,14 @@ func TestPragmasSetOnConnection(t *testing.T) {
 	}
 	if foreignKeys != 1 {
 		t.Errorf("foreign_keys = %d, want 1 (ON)", foreignKeys)
+	}
+
+	// The local disk is the only copy of the day's writes, so durability is FULL (2).
+	var synchronous int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+		t.Fatalf("querying synchronous: %v", err)
+	}
+	if synchronous != 2 {
+		t.Errorf("synchronous = %d, want 2 (FULL)", synchronous)
 	}
 }

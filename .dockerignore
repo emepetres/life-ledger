@@ -16,7 +16,7 @@
 # VCS, CI, IaC, and docs — not needed to compile the binary.
 .git/
 .github/
-infra/
+deploy/
 docs/
 *.md
 

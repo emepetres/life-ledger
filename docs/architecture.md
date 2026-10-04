@@ -42,21 +42,15 @@ internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
 internal/store/      Persistence. A repository over one SQLite file via the
                      pure-Go modernc.org/sqlite driver; owns the self-creating
                      startup path and embedded goose migrations, and sets the
-                     WAL / foreign_keys / busy_timeout pragmas. Two tables:
-                     `expense` and `income` (income.linked_expense_id ->
-                     expense.id ON DELETE CASCADE); a thin per-table repository
-                     (List / ListIncomes + per-record CRUD) — netting and
-                     interleaving are the server's job, not the store's. An
-                     optional Backup sink (WithBackup) makes it durable on
-                     ephemeral storage: a consistent VACUUM INTO snapshot is saved
-                     after each write, and a cold boot restores from it.
-                     (ADR-0003, ADR-0009)
-internal/blobbackup/ Production implementation of store.Backup: a thin adapter
-                     that snapshots the SQLite database to a single Azure Blob
-                     (managed identity, no account key) and restores it on a cold
-                     boot. The one place the Azure SDK enters the binary — every
-                     test runs against in-process fakes of the same seam — so
-                     local QA and CI stay zero-config and offline. (ADR-0003)
+                     WAL / foreign_keys / synchronous=FULL / busy_timeout
+                     pragmas. Two tables: `expense` and `income`
+                     (income.linked_expense_id -> expense.id ON DELETE CASCADE);
+                     a thin per-table repository (List / ListIncomes +
+                     per-record CRUD) — netting and interleaving are the
+                     server's job, not the store's. The binary has no backup
+                     role (ADR-0012): it opens a local file and logs whether it
+                     was "created new" or "opened existing".
+                     (ADR-0003, ADR-0009, ADR-0012)
 internal/auth/       Access control. The protective middleware, the HMAC-signed
                      stateless session cookie, and a per-IP in-memory login rate
                      limiter. (ADR-0004)
@@ -81,27 +75,18 @@ flowchart TD
     server["internal/server<br/>(HTTP handlers, templates)"]
     auth["internal/auth<br/>(guard, session, rate limit)"]
     store["internal/store<br/>(SQLite repository)"]
-    blobbackup["internal/blobbackup<br/>(Azure Blob store.Backup sink)"]
     expense["internal/expense<br/>(parser + Expense record)"]
     web["web<br/>(embedded templates + htmx)"]
 
     main --> server
     main --> auth
     main --> store
-    main --> blobbackup
     server --> auth
     server --> store
     server --> expense
     server --> web
     store --> expense
-    blobbackup --> store
 ```
-
-`internal/blobbackup` is wired only in `cmd/life-ledger`: when
-`LIFELEDGER_BACKUP_BLOB_URL` is set, `main` constructs the Blob `Sink` and injects
-it via `store.WithBackup`. It depends on `internal/store` only to implement that
-package's `Backup` interface — the store never depends back on it, so the SDK stays
-out of the persistence core and out of every test.
 
 `internal/expense` is the leaf domain package — everything depends inward on it,
 and it depends on nothing. The `server` package defines its own narrow `Store`
@@ -152,80 +137,84 @@ Two invariants worth noting:
 
 ## Deployment topology
 
-Deployed to Azure Container Apps, provisioned by Bicep, shipped by GitHub Actions
-(ADR-0005). The app is always-warm and capped at a single replica to keep SQLite
-single-writer. The database lives on a local **EmptyDir** volume — ephemeral disk
-that honours SQLite's POSIX locks; durability is the store module's job, which
-backs the database up to a **Blob container** after every write and restores it
-on a cold boot (ADR-0003).
+Deployed on the home mini-PC (Proxmox) in an unprivileged LXC guest, `life-ledger`
+(CT 101), as one static binary under systemd (ADR-0010, ADR-0011). GitHub Actions
+publishes the image to GHCR; a timer on the guest pulls new digests and swaps the
+binary. Public traffic arrives through an outbound-only Cloudflare Tunnel at
+`ledger.carnero.net` (ADR-0013): the guest has no inbound firewall rules. The DB
+is a SQLite file on the guest's local ext4 (ADR-0012), and a nightly box-side job
+snapshots it to Google Drive (ADR-0014).
 
 ```mermaid
 flowchart LR
+    dev["Developer"]
+
     subgraph GH["GitHub"]
-        pr["Pull request"]
-        main["Push to main"]
-        cicd["ci-cd.yml<br/>test → deploy (gated)"]
-        infra["infra.yml<br/>Bicep (separate)"]
-        backupcron["backup.yml<br/>nightly cron 0 1 * * * UTC<br/>gate → copy → prune (ADR-0007)"]
+        main["Merge to main"]
+        cicd["ci-cd.yml<br/>test → publish (gated)"]
+        ghcr["GHCR<br/>ghcr.io/emepetres/life-ledger<br/>:sha + :latest"]
     end
 
-    subgraph AZ["Azure — West Europe"]
-        acr["Container Registry<br/>(Basic)"]
-        subgraph ENV["Container Apps environment"]
-            app["Container App<br/>min 1 / max 1<br/>ingress :8080, /health probe"]
-            data["EmptyDir volume<br/>/data (SQLite + WAL)"]
-        end
-        blob["ledgerbackup container<br/>live backup snapshot (expenses.db)"]
-        snaps["ledgersnapshots container<br/>daily/ (7-day) + monthly/ (forever)"]
+    subgraph BOX["Home mini-PC — Proxmox, LXC guest life-ledger"]
+        updater["life-ledger-update.timer<br/>every 5 min: digest poll,<br/>swap, /health check, rollback"]
+        unit["life-ledger.service<br/>static binary :8080"]
+        db[("expenses.db<br/>SQLite on local ext4")]
+        cfd["cloudflared.service<br/>outbound tunnel"]
+        backup["life-ledger-backup.timer<br/>03:00 Europe/Madrid<br/>VACUUM INTO → gate → rclone"]
     end
 
-    pr --> cicd
+    edge["Cloudflare edge<br/>TLS, ledger.carnero.net"]
+    browser["Browser"]
+    drive["Google Drive<br/>daily/ (7 days) + monthly/ (kept)"]
+    hc["healthchecks.io"]
+
+    dev -->|"git push / PR"| main
     main --> cicd
-    cicd -->|"OIDC login"| acr
-    cicd -->|"push :latest + :sha"| acr
-    cicd -->|"az containerapp update → new revision"| app
-    app -->|"managed-identity pull"| acr
-    app -->|"volume mount"| data
-    app -->|"backup-on-write / restore-on-boot<br/>(UAMI, scoped to ledgerbackup)"| blob
-    backupcron -->|"OIDC login, read src (Reader)"| blob
-    backupcron -->|"gated blob-to-blob copy + prune<br/>(OIDC, Contributor on dest)"| snaps
-    infra -.->|"provisions"| acr
-    infra -.->|"provisions"| ENV
-    infra -.->|"provisions"| blob
-    infra -.->|"provisions"| snaps
+    cicd -->|"push image"| ghcr
+    updater -->|"poll :latest, pull on change"| ghcr
+    updater -->|"swap binary, restart"| unit
+    unit --- db
+    unit --> cfd
+    cfd -->|"outbound tunnel"| edge
+    edge --> browser
+    backup -->|"read snapshot"| db
+    backup -->|"upload (rclone, drive.file)"| drive
+    backup -->|"start / ok / fail ping"| hc
 ```
 
 - **CI/CD** (`ci-cd.yml`): one gated workflow — tests run on every PR and push to
-  main; deploy runs only on push to main, only after tests pass.
-- **Infra** (`infra.yml`): separate, on dispatch or `infra/**` changes; idempotent
-  Bicep apply.
-- **Nightly retained backup** (`backup.yml`, ADR-0007): a third workflow on a
-  `0 1 * * *` UTC cron (plus dispatch). It integrity-checks the live
-  `ledgerbackup/expenses.db`, and only if that passes, server-side-copies it into
-  the **`ledgersnapshots`** container as `daily/YYYY-MM-DD.db` (plus, within the
-  first 7 UTC days of a month, a `monthly/YYYY-MM.db` for the previous month if it
-  is still missing — so a missed 1st self-heals that week), then prunes dailies
-  older than 7 days — month-ends are kept forever. It authenticates with the
-  *same* OIDC federated identity as CD; the app's own Blob grant is scoped down
-  to `ledgerbackup` so a buggy app build cannot reach the history. A failed
-  integrity check skips the copy, freezes the prune, and raises a sticky
-  `backup-alarm` issue. Recovery is
-  operator-driven via the **[restore runbook](deployment/restore-runbook.md)**.
-- **Auth to Azure**: OIDC federated identity — no long-lived secret in GitHub.
-- **Secrets**: the app's `LIFELEDGER_PASSWORD_HASH` and `LIFELEDGER_SESSION_KEY`
-  reach the container as ACA secrets. Setup: [docs/deployment/first-deploy.md](deployment/first-deploy.md).
+  main; publish (image to GHCR as `:<sha>` and `:latest`) runs only on push to
+  main, only after tests pass and only when image-affecting files changed.
+  `ghcr-cleanup.yml` prunes the package weekly, keeping the 10 newest versions.
+  Nothing in CI reaches the box: it only publishes.
+- **Updater** (`life-ledger-update`, ADR-0011): every 5 minutes it compares the
+  `:latest` digest with the last good one, extracts the binary from the image,
+  swaps it in, and polls `/health`. A failing digest is rolled back and not
+  retried.
+- **Ingress** (`cloudflared`, ADR-0013): TLS ends at Cloudflare's edge; the tunnel
+  forwards to `127.0.0.1:8080`. The guest's firewall allows DNS, the gateway and
+  the internet outbound, and drops the rest of the LAN.
+- **Nightly backup** (`life-ledger-backup`, ADR-0014): a snapshot with
+  `VACUUM INTO`, gated on `integrity_check` and the migration version, uploaded to
+  Google Drive as `daily/YYYY-MM-DD.db` (plus `monthly/YYYY-MM.db` on the 1st).
+  Dailies older than 7 days are pruned; month-ends are kept. healthchecks.io
+  emails on a missed night or a gate failure. Recovery is operator-driven via the
+  **[restore runbook](deployment/restore-runbook.md)**.
+- **Secrets**: `LIFELEDGER_PASSWORD_HASH` and `LIFELEDGER_SESSION_KEY` live in
+  `/etc/life-ledger/app.env` (root-only); the tunnel token and the backup keys have
+  their own files so the app process never sees them. The password manager is
+  canonical. Setup: [mini-PC runbook](deployment/mini-pc/README.md).
 
 ## Configuration surface
 
 | Env var | Set by | Purpose |
 | --- | --- | --- |
 | `LIFELEDGER_ADDR` | default `:8080` | Listen address. |
-| `LIFELEDGER_DB_PATH` | Bicep → `/data/expenses.db` | SQLite file on the mounted volume. |
-| `LIFELEDGER_BACKUP_BLOB_URL` | Bicep → storage container URL | Azure Blob container for backup-on-write / restore-on-boot (managed identity). Unset locally/CI → no sink, pure local file, no Azure call. |
-| `LIFELEDGER_PASSWORD_HASH` | ACA secret | bcrypt hash of the shared password (required). |
-| `LIFELEDGER_SESSION_KEY` | ACA secret | Session-cookie signing secret (required in prod). |
-| `LIFELEDGER_SECURE_COOKIE` | Bicep → `true` | `Secure` flag on the session cookie. |
-| `TZ` | Bicep → `Europe/Madrid` | Selects the embedded zoneinfo so "today" is the local day. |
+| `LIFELEDGER_DB_PATH` | unit → `/var/lib/life-ledger/expenses.db` | SQLite file on the guest's local disk. |
+| `LIFELEDGER_PASSWORD_HASH` | `app.env` | bcrypt hash of the shared password (required). |
+| `LIFELEDGER_SESSION_KEY` | `app.env` | Session-cookie signing secret (required in prod). |
+| `LIFELEDGER_SECURE_COOKIE` | unit → `true` | `Secure` flag on the session cookie. |
+| `TZ` | unit → `Europe/Madrid` | Selects the embedded zoneinfo so "today" is the local day. |
 
 ## Decision record
 
@@ -233,10 +222,15 @@ flowchart LR
 - [ADR-0002](adr/0002-free-text-entry-syntax.md) — free-text entry syntax
 - [ADR-0003](adr/0003-persistence-and-storage.md) — persistence & storage (SQLite)
 - [ADR-0004](adr/0004-access-model-auth.md) — access model / auth
-- [ADR-0005](adr/0005-deploy-azure-cicd.md) — deploy to Azure via Bicep + GitHub Actions
-- [ADR-0006](adr/0006-user-assigned-identity-for-acr-pull.md) — user-assigned identity for ACR pull
+- [ADR-0005](adr/0005-deploy-azure-cicd.md) — deploy to Azure via Bicep + GitHub Actions *(superseded by ADR-0010)*
+- [ADR-0006](adr/0006-user-assigned-identity-for-acr-pull.md) — user-assigned identity for ACR pull *(superseded by ADR-0010)*
 - [ADR-0007](adr/0007-scheduled-retained-backup.md) — scheduled retained backup + restore runbook
 - [ADR-0008](adr/0008-canonical-entry-line-edit.md) — canonical entry line on edit; edits capped at 12 months
 - [ADR-0009](adr/0009-income-and-paybacks.md) — income & paybacks: record shape, entry syntax, net cost
+- [ADR-0010](adr/0010-host-home-mini-pc.md) — host on the home mini-PC (leaving Azure); best-effort availability, near-zero RPO, portability invariant
+- [ADR-0011](adr/0011-runtime-lxc-static-binary.md) — run the static binary in an unprivileged LXC, pulled from the GHCR image
+- [ADR-0012](adr/0012-storage-durability-on-the-box.md) — storage durability on the box: no in-app backup
+- [ADR-0013](adr/0013-public-ingress-cloudflare-tunnel.md) — public ingress via Cloudflare Tunnel at `ledger.carnero.net`
+- [ADR-0014](adr/0014-nightly-offsite-snapshot-to-google-drive.md) — nightly offsite snapshot to Google Drive *(supersedes ADR-0007)*
 
-Operational runbooks live in [docs/deployment/](deployment/): [first-deploy.md](deployment/first-deploy.md) and [restore-runbook.md](deployment/restore-runbook.md).
+Operational runbooks live in [docs/deployment/](deployment/): the [mini-PC runbook](deployment/mini-pc/README.md) and the [restore runbook](deployment/restore-runbook.md).

@@ -1,5 +1,7 @@
 # Comparing candidate storage backends for SQLite on Azure Container Apps
 
+> **Historical:** the Azure host is gone ([ADR-0010](../adr/0010-host-home-mini-pc.md)). Kept as history; nothing here describes the live system.
+
 Research for [issue #21](https://github.com/emepetres/life-ledger/issues/21). **Advisory** input to the
 later persistence decision ticket — this document ranks the candidates with evidence but does **not**
 make the final choice — that is recorded in

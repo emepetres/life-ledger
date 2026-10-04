@@ -1,6 +1,6 @@
 # User-assigned identity to break the ACR-pull deadlock
 
-**Status:** accepted — supersedes the *"pulls via its system-assigned managed identity"* decision in [ADR-0005](0005-deploy-azure-cicd.md).
+**Status:** superseded by [ADR-0010](0010-host-home-mini-pc.md) (no ACR or Azure identity remains). Previously accepted — superseded the *"pulls via its system-assigned managed identity"* decision in [ADR-0005](0005-deploy-azure-cicd.md).
 
 The Container App authenticates to ACR (image pull) and to Blob (backup) with a **single user-assigned managed identity**, granted `AcrPull` and `Storage Blob Data Contributor` **before** the app is created. ADR-0005 specified a *system-assigned* identity; that choice makes the very first deploy impossible, which is what this ADR fixes.
 

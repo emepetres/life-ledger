@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Life Ledger offsite backup
+
+[Timer]
+# 03:00 Madrid time (the guest clock is UTC, so the zone is explicit). Persistent: a run missed by a power cut fires on boot.
+OnCalendar=*-*-* 03:00:00 Europe/Madrid
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

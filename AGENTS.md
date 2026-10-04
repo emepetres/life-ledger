@@ -23,7 +23,9 @@ Living system map — modules, request flow, deployment topology — in
 
 When creating or updating documentation in this repo, write shell scripts in
 **PowerShell Core (`pwsh`)** — the target runtime is Windows. Use ```pwsh fenced
-code blocks, not `bash`/`sh`/`shell`. Idiomatic translations:
+code blocks, not `bash`/`sh`/`shell`. **Exception:** commands that run _on_ the
+home mini-PC (Proxmox host or the `life-ledger` guest, ADR-0011) are `bash`.
+Idiomatic translations:
 
 - `FOO="bar"` → `$FOO = "bar"`
 - `VAR=$(cmd)` → `$VAR = cmd`

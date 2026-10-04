@@ -28,8 +28,7 @@ without a session; everything else requires one.
 | Env var                    | Default       | Meaning                                                                                                                                                                                                               |
 | -------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LIFELEDGER_ADDR`          | `:8080`       | Listen address (`host:port` or `:port`).                                                                                                                                                                              |
-| `LIFELEDGER_DB_PATH`       | `./data/expenses.db` | SQLite database file; the parent directory is created on first run.                                                                                                                                            |
-| `LIFELEDGER_BACKUP_BLOB_URL` | _(unset)_   | Azure Storage **container** URL for backup-on-write / restore-on-boot (authenticated via managed identity). Unset means no backup — a pure local file, no Azure dependency; set it only in production on ephemeral storage. |
+| `LIFELEDGER_DB_PATH`       | `./data/expenses.db` | SQLite database file; created (with its parent directory) if absent, opened as-is otherwise.                                                                                                                                            |
 | `LIFELEDGER_PASSWORD_HASH` | _(required)_  | bcrypt hash of the shared password (generate with `make hash-password`). The app won't boot without it.                                                                                                               |
 | `LIFELEDGER_SECURE_COOKIE` | `false`       | Sets the session cookie's `Secure` flag. Leave off for local `http://localhost`; set `true` in production (HTTPS).                                                                                                    |
 | `LIFELEDGER_SESSION_KEY`   | _(ephemeral)_ | Session-cookie signing secret. **Required** when `LIFELEDGER_SECURE_COOKIE=true` (production). Left unset for local QA, a random key is generated per boot (sessions drop on restart). Rotating it logs everyone out. |
@@ -61,37 +60,20 @@ distroless image (ADR-0005).
 
 ## Deploy
 
-Life Ledger runs on Azure Container Apps, provisioned by Bicep in `infra/` and
-shipped by GitHub Actions (ADR-0005):
+Life Ledger runs on the home mini-PC (ADR-0010, ADR-0011) and is shipped by
+GitHub Actions. To deploy, merge to `main`:
 
-- Push to `main` runs the gated CI/CD workflow — tests, then deploy.
-- Infrastructure is applied by a separate workflow on `infra/**` changes or manual
-  dispatch.
+1. The gated CI/CD workflow runs the tests, then publishes the image to
+   `ghcr.io/emepetres/life-ledger` (`:<sha>` and `:latest`) when image-affecting
+   files changed.
+2. The box's updater polls GHCR and swaps in the new binary, rolling back if
+   `/health` fails. The new version is live about 5 minutes after the image is published.
 
-First-time setup (OIDC trust, GitHub Secrets, bootstrap) is a single script,
-[`scripts/first-deploy.ps1`](scripts/first-deploy.ps1), driven by a `.env` file
-(copy [`.env.example`](.env.example)):
+`ghcr-cleanup.yml` prunes old package versions weekly, keeping the 10 newest.
 
-```pwsh
-Copy-Item .env.example .env   # then fill it in
-pwsh scripts/first-deploy.ps1
-```
-
-The `.env` it reads (see [`.env.example`](.env.example)):
-
-| Value                      | Meaning                                                                          |
-| -------------------------- | -------------------------------------------------------------------------------- |
-| `SUBSCRIPTION_ID`          | Azure subscription for the resource group and all resources.                     |
-| `RESOURCE_GROUP`           | Resource group to create/reuse; the deploy identity is scoped here.              |
-| `LOCATION`                 | Azure region (e.g. `westeurope`).                                                 |
-| `REPO`                     | GitHub repo as `owner/repo`.                                                      |
-| `APP_REG_NAME`             | Entra app-registration display name; looked up by name and reused on re-run.     |
-| `LIFELEDGER_PASSWORD_HASH` | bcrypt login-password hash. Empty ⇒ the script hashes a password you type.       |
-| `LIFELEDGER_SESSION_KEY`   | Session-cookie signing secret. Empty ⇒ the script mints a random key.            |
-
-The script is idempotent — safe to re-run. Full walkthrough (and how to repair
-any step by hand) in
-[docs/deployment/first-deploy.md](docs/deployment/first-deploy.md). The overall
+Setting up the box (guest, tunnel, secrets, backup, restore) is covered by the
+[mini-PC runbook](docs/deployment/mini-pc/README.md); copy
+[`.env.example`](.env.example) to `.env` as the operator file for it. The overall
 system — modules, request flow, and deployment topology — is in
 [docs/architecture.md](docs/architecture.md).
 

@@ -37,9 +37,8 @@ const DefaultDBPath = "./data/expenses.db"
 // Store is a repository over the expense table. It is safe for concurrent use;
 // the underlying *sql.DB manages its own connection pool.
 type Store struct {
-	db     *sql.DB
-	now    func() time.Time
-	backup Backup // durable sink for backup-on-write / restore-on-boot; nil = pure local file
+	db  *sql.DB
+	now func() time.Time
 }
 
 // Option customises a Store at open time.
@@ -52,16 +51,22 @@ func WithClock(now func() time.Time) Option {
 	return func(s *Store) { s.now = now }
 }
 
+// bootOrigin names which boot path Open took, for it to log. The values are a
+// load-bearing contract — TestBootLogsOrigin asserts them — so they live here as
+// constants rather than as inline string literals.
+type bootOrigin string
+
+const (
+	originCreated bootOrigin = "created new"
+	originOpened  bootOrigin = "opened existing"
+)
+
 // Open opens the SQLite database at path — creating the file and its parent
 // directory if absent — sets the connection pragmas, applies any pending
 // embedded migrations, and returns a ready Store. It is the single startup path
 // used identically by local QA and production (ADR-0003); the only difference is
-// the configured path. Call Close when done.
-//
-// When a backup sink is configured (WithBackup) and the local file is absent,
-// Open first restores from the sink so the volume-mounted ephemeral file is
-// rebuilt before it is opened; migrations still run afterwards, bringing a
-// restored older database up to the current schema before it serves.
+// the configured path. The binary has no backup role (ADR-0012): the local file
+// is all it knows about. Call Close when done.
 func Open(path string, opts ...Option) (*Store, error) {
 	s := &Store{now: func() time.Time { return time.Now().UTC() }}
 	for _, opt := range opts {
@@ -74,11 +79,9 @@ func Open(path string, opts ...Option) (*Store, error) {
 		}
 	}
 
-	// Startup orchestration (ADR-0003): decide restore-from-backup vs fresh vs
-	// reuse-existing before opening, so the file is in place when we open it.
-	origin, err := s.restorePlan(context.Background(), path)
-	if err != nil {
-		return nil, err
+	origin := originCreated
+	if _, err := os.Stat(path); err == nil {
+		origin = originOpened
 	}
 
 	db, err := sql.Open("sqlite", dsn(path))
@@ -101,16 +104,20 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // dsn builds the modernc.org/sqlite connection string, appending the pragmas
 // that must hold on every connection the pool opens (ADR-0003):
-//   - journal_mode=WAL     — the concurrency/resilience mode the volume-mounted
-//     single-writer deployment relies on.
+//   - journal_mode=WAL     — the concurrency/resilience mode the single-writer
+//     deployment relies on.
 //   - foreign_keys=ON      — off by default in SQLite; the correct default for
 //     when a second table arrives.
+//   - synchronous=FULL     — fsync on every commit; the local disk is the only
+//     copy of the day's writes, so durability is set explicitly rather than left
+//     to the WAL-mode default (NORMAL).
 //   - busy_timeout=5000    — wait rather than fail immediately on a momentary
 //     write lock, keeping WAL robust under the app's light load.
 func dsn(path string) string {
 	q := url.Values{}
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "foreign_keys(ON)")
+	q.Add("_pragma", "synchronous(FULL)")
 	q.Add("_pragma", "busy_timeout(5000)")
 	return "file:" + filepath.ToSlash(path) + "?" + q.Encode()
 }

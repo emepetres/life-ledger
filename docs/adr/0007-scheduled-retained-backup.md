@@ -1,6 +1,9 @@
 # Scheduled retained backup of the database, and a restore runbook
 
-**Status:** accepted — extends the persistence design in
+**Status:** superseded by [ADR-0014](0014-nightly-offsite-snapshot-to-google-drive.md)
+(nightly offsite snapshot to Google Drive) — the Azure Blob and GitHub Actions
+mechanics below no longer exist. The retention policy (7 dailies, month-ends
+forever, integrity gate) carries over. Originally: accepted — extends the persistence design in
 [ADR-0003](0003-persistence-and-storage.md) and the deploy design in
 [ADR-0005](0005-deploy-azure-cicd.md). Neither is superseded; this adds a new
 protection they left open.
