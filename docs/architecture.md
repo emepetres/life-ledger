@@ -196,9 +196,12 @@ flowchart LR
 ```
 
 - **CI/CD** (`ci-cd.yml`): one gated workflow — tests run on every PR and push to
-  main; deploy runs only on push to main, only after tests pass.
-- **Infra** (`infra.yml`): separate, on dispatch or `infra/**` changes; idempotent
-  Bicep apply.
+  main; publish (image to GHCR as `:<sha>` and `:latest`) runs only on push to
+  main, only after tests pass and only when image-affecting files changed. The
+  mini-PC's updater pulls the new digest (ADR-0011). `ghcr-cleanup.yml` prunes
+  the package weekly, keeping the 10 newest versions. The Azure `infra.yml` and
+  `backup.yml` workflows and the Bicep template were removed; the Azure diagram
+  above is historical.
 - **Nightly retained backup** (`backup.yml`, ADR-0007): a third workflow on a
   `0 1 * * *` UTC cron (plus dispatch). It integrity-checks the live
   `ledgerbackup/expenses.db`, and only if that passes, server-side-copies it into

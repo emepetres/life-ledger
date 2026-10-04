@@ -61,12 +61,12 @@ distroless image (ADR-0005).
 
 ## Deploy
 
-Life Ledger runs on Azure Container Apps, provisioned by Bicep in `infra/` and
-shipped by GitHub Actions (ADR-0005):
+Life Ledger runs on the home mini-PC (ADR-0011) and is shipped by GitHub Actions:
 
-- Push to `main` runs the gated CI/CD workflow — tests, then deploy.
-- Infrastructure is applied by a separate workflow on `infra/**` changes or manual
-  dispatch.
+- Push to `main` runs the gated CI/CD workflow — tests, then publish the image to
+  `ghcr.io/emepetres/life-ledger` (`:<sha>` and `:latest`) when image-affecting
+  files changed. The box's updater picks up the new `:latest` on its own.
+- `ghcr-cleanup.yml` prunes old package versions weekly, keeping the 10 newest.
 
 First-time setup (OIDC trust, GitHub Secrets, bootstrap) is a single script,
 [`scripts/first-deploy.ps1`](scripts/first-deploy.ps1), driven by a `.env` file

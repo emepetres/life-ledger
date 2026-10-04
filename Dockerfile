@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Life Ledger ships as a single fully-static Go binary (ADR-0003, ADR-0005):
+# Life Ledger ships as a single fully-static Go binary (ADR-0003, ADR-0005, ADR-0011):
 # a multi-stage build compiles it with CGO disabled — pure-Go SQLite, no libc —
 # and drops it into a distroless static image that runs as a non-root user.
 # Templates, static assets, and migrations are all go:embed'd, so the runtime
@@ -28,9 +28,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # :nonroot tag runs as an unprivileged user and bundles CA certificates.
 FROM gcr.io/distroless/static-debian12:nonroot
 
-# Sensible defaults; production overrides via Container Apps (Bicep, ADR-0005).
-#   LIFELEDGER_DB_PATH — the DB lives on the mounted /data volume (ephemeral in
-#                        production; the store backs it up to Blob, ADR-0003).
+# Published to GHCR by CI and pulled by the mini-PC's updater, which runs the
+# binary at /life-ledger — keep that path stable (ADR-0011). The label links the
+# GHCR package back to this repo.
+LABEL org.opencontainers.image.source="https://github.com/emepetres/life-ledger"
+
+# Sensible defaults; the box overrides them at run time (ADR-0011).
+#   LIFELEDGER_DB_PATH — the DB lives on the mounted /data volume of the box.
 #   TZ                 — selects the embedded zoneinfo so "today" is the local day.
 ENV LIFELEDGER_DB_PATH=/data/expenses.db \
     TZ=Europe/Madrid

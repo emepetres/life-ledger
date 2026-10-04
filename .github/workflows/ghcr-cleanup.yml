@@ -1,0 +1,27 @@
+# Weekly prune of the GHCR package so it doesn't grow forever (ADR-0011).
+#
+# Every publish pushes one standalone manifest tagged `:<sha>` and `:latest`
+# (no provenance/SBOM attestations, see ci-cd.yml), so one package version is one
+# build. Keep the 10 newest versions. `latest` always sits on the newest build, so
+# it is never among the pruned ones. (The action's `ignore-versions` matches
+# version names, which are digests on GHCR, so it cannot protect a tag.)
+
+name: ghcr-cleanup
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: life-ledger
+          package-type: container
+          min-versions-to-keep: 10
