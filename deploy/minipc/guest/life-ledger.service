@@ -1,0 +1,32 @@
+[Unit]
+Description=Life Ledger
+After=network-online.target
+Wants=network-online.target
+# Under ADR-0012 the app no longer restores itself: a missing DB must fail loudly
+# here, never silently start empty. Restore the DB before the first start.
+AssertPathExists=/var/lib/life-ledger/expenses.db
+
+[Service]
+DynamicUser=yes
+StateDirectory=life-ledger
+EnvironmentFile=/etc/life-ledger/app.env
+Environment=LIFELEDGER_ADDR=127.0.0.1:8080
+Environment=LIFELEDGER_SECURE_COOKIE=true
+Environment=LIFELEDGER_DB_PATH=/var/lib/life-ledger/expenses.db
+Environment=TZ=Europe/Madrid
+ExecStart=/opt/life-ledger/life-ledger
+Restart=always
+RestartSec=5
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

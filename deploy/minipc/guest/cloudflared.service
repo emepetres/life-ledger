@@ -1,0 +1,22 @@
+[Unit]
+Description=Cloudflare Tunnel for Life Ledger (ADR-0013)
+After=network-online.target
+Wants=network-online.target
+# The tunnel token lives in a root-only env file (TUNNEL_TOKEN=...). The app
+# never sees it: it has its own env file. Empty file = tunnel not set up yet.
+ConditionFileNotEmpty=/etc/life-ledger/cloudflared.env
+
+[Service]
+EnvironmentFile=/etc/life-ledger/cloudflared.env
+# apt + unattended-upgrades own updates, so cloudflared's own updater is off.
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run
+Restart=always
+RestartSec=5
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

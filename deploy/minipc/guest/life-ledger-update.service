@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull the latest Life Ledger image binary from GHCR and swap it in
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/life-ledger-update
