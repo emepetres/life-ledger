@@ -104,12 +104,21 @@ Ownership comes from the unit's `StateDirectory`: the directory belongs to the
 app's dynamic uid, and the file must match it. The stale `-wal`/`-shm` belong to
 the old DB and must go, or SQLite would replay them onto the snapshot.
 
+Work through `/var/lib/life-ledger`, not `/var/lib/private/life-ledger`: on a
+running guest it is the symlink into the private directory, and on a fresh guest
+(where the unit has never started) it is the plain directory `bootstrap.sh`
+created, which systemd moves into `/var/lib/private` and chowns on the first
+start. `/var/lib/private/life-ledger` does not exist yet on a fresh guest.
+
+The block is one `&&` chain so a failed `cd` stops it instead of running the
+`rm`/`install` in the wrong directory.
+
 ```bash
-cd /var/lib/private/life-ledger
-uid=$(stat -c %u .)
-rm -f expenses.db expenses.db-wal expenses.db-shm
-install -o "$uid" -g "$uid" -m 0644 /root/restore.db expenses.db
-rm /root/restore.db
+cd /var/lib/life-ledger &&
+  uid=$(stat -c %u .) &&
+  rm -f expenses.db expenses.db-wal expenses.db-shm &&
+  install -o "$uid" -g "$uid" -m 0644 /root/restore.db expenses.db &&
+  rm /root/restore.db
 ```
 
 ### 6. Start the unit and verify
@@ -139,6 +148,19 @@ Images are tagged by `github.sha`
 (`ghcr.io/emepetres/life-ledger:<sha>`). Nothing records which SHA was live when a
 snapshot was taken, so correlate by hand: match the snapshot's date against the git
 history to find a commit from before the bad migration merged.
+
+Not every commit has an image: docs-only and deploy-only pushes publish nothing,
+tags use the **full 40-character** SHA, and `ghcr-cleanup.yml` keeps only the 10
+newest versions. Pick from the tags that actually exist:
+
+```bash
+crane ls ghcr.io/emepetres/life-ledger      # full-SHA tags still on GHCR
+```
+
+If no surviving tag predates the bad migration, build one from that commit and
+push it by hand before continuing. While a pin is in place the cleanup can still
+delete the pinned version once 10 newer builds exist, after which every updater
+run fails on `crane digest`: revert the pin (step 6) before that happens.
 
 **2. Do the ordinary restore steps 1–5** (download, gate, stop the app and the
 timer, keep the `pre-restore` copy, install the snapshot). Stop *before* step 6:

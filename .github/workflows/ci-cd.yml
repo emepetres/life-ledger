@@ -118,8 +118,9 @@ jobs:
     needs: [test, changes]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.image == 'true'
     runs-on: ubuntu-latest
-    # Serialise image pushes so two merges can't race on :latest; never cancel
-    # an in-flight push.
+    # Serialise image pushes so the :latest check-and-move below is atomic; never
+    # cancel an in-flight push. Serialising alone does not keep merge order (the
+    # `test` jobs race), so the move step also refuses to go backwards.
     concurrency:
       group: publish-image
       cancel-in-progress: false
@@ -130,8 +131,14 @@ jobs:
       IMAGE: ghcr.io/emepetres/life-ledger
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The :latest guard needs history for `git merge-base --is-ancestor`.
+          fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
+
+      # Also logs crane in to ghcr.io with the workflow's GITHUB_TOKEN.
+      - uses: imjasonh/setup-crane@v0.4
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -148,7 +155,27 @@ jobs:
           push: true
           provenance: false
           sbom: false
-          # Both tags point at the same manifest; the updater polls :latest.
-          tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:latest
+          # :latest is moved separately below, only if this commit is newer.
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Move :latest forward
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The commit :latest was built from. Empty if :latest is missing or
+          # predates the revision label.
+          current=$(crane config "$IMAGE:latest" 2>/dev/null \
+            | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' || true)
+          echo "current :latest revision: ${current:-unknown}"
+          if [ -n "$current" ] && git rev-parse -q --verify "$current^{commit}" >/dev/null \
+             && ! git merge-base --is-ancestor "$current" "$SHA"; then
+            # :latest is at a commit this one does not descend from, i.e. a
+            # later merge already published. Leave it there.
+            echo "::notice:::latest is at $current, which is not an ancestor of $SHA; not moving it."
+            exit 0
+          fi
+          # Unknown or ancestor revision: move forward (fail toward publishing).
+          # `crane tag` retags the same manifest, so the updater sees one digest.
+          crane tag "$IMAGE:$SHA" latest

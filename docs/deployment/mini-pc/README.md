@@ -165,8 +165,10 @@ steps on the package (GitHub → Packages → `life-ledger`; neither has an API)
 - **Package settings → Change visibility → Public**, so the guest can pull with no
   credentials.
 - **Package settings → Manage Actions access → Add repository**
-  `emepetres/life-ledger` with the **Write** role, so the workflow's `GITHUB_TOKEN`
-  can push to a package that was created outside Actions.
+  `emepetres/life-ledger` with the **Admin** role, so the workflow's `GITHUB_TOKEN`
+  can push to a package that was created outside Actions. **Write** is enough for
+  `ci-cd.yml` to push, but `ghcr-cleanup.yml` (`actions/delete-package-versions`)
+  needs **Admin** on a container package to delete versions, or it fails with 403.
 
 Force a run now: `systemctl start life-ledger-update.service`, then
 `journalctl -u life-ledger-update -n 50`.
