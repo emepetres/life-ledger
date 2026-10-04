@@ -46,7 +46,7 @@ a password, an account), in this order:
 | 5 | Authorise rclone in your browser, ship `rclone.conf` to the guest | step 7b | [#104](https://github.com/emepetres/life-ledger/issues/104) |
 | 6 | Create the healthchecks.io check, put the ping URL on the guest | step 7c | [#104](https://github.com/emepetres/life-ledger/issues/104) |
 | 7 | Store every secret in the password manager | step 7d | [#104](https://github.com/emepetres/life-ledger/issues/104) |
-| 8 | Restore `data/` into the guest **before the first real start** | restore step | map, not yet written |
+| 8 | Restore `data/` into the guest **before the first real start** | step 8 | [#108](https://github.com/emepetres/life-ledger/issues/108), done |
 | 9 | Pull the plug once (real power-cut test) | step 6 | [#103](https://github.com/emepetres/life-ledger/issues/103), open |
 
 The agent cannot run anything on the box unattended: SSH there is
@@ -142,7 +142,7 @@ Then in the guest: `systemctl restart cloudflared` and check
 
 `life-ledger.service` has `AssertPathExists=/var/lib/life-ledger/expenses.db`
 (ADR-0012), so it **refuses to start** until a DB is in place. The real restore is
-its own step in the map. To smoke-test the plumbing before then, create an empty
+step 8. To smoke-test the plumbing before then, create an empty
 file the app will migrate:
 
 ```bash
@@ -346,33 +346,16 @@ downloaded snapshot passed `integrity_check`; a forced gate failure sent the
 
 ## 8. Restore the real database
 
+The procedure lives in the [restore runbook](../restore-runbook.md): it covers
+restoring from a Drive snapshot, the migration gate and the `:<sha>` downgrade.
+For the first start on a fresh guest follow its
+[fresh-guest section](../restore-runbook.md#restoring-onto-a-fresh-guest).
+
 Done 2026-10-04 from the old Azure copy (`ledgerbackup/expenses.db`, 2026-09-12,
 85 expenses and 8 incomes, goose version 2). The repo's local `data/expenses.db`
-was **older** (July): check file dates before choosing the source.
-
-The app must be **stopped** during the swap, and the placeholder's `-wal`/`-shm`
-files must go with it. The guest's DB path is a symlink into
-`/var/lib/private/life-ledger` (`DynamicUser`); the file must be owned by the
-app's dynamic uid, which `stat -c %u /var/lib/private/life-ledger` shows.
-
-```bash
-# On the Proxmox host, after `scp expenses.db root@192.168.1.167:/root/restore.db`
-pct push 101 /root/restore.db /root/restore.db && rm /root/restore.db
-pct exec 101 -- bash -c '
-  set -e
-  sqlite3 /root/restore.db "PRAGMA integrity_check; SELECT MAX(version_id) FROM goose_db_version"
-  cd /var/lib/private/life-ledger
-  uid=$(stat -c %u .)
-  systemctl stop life-ledger
-  rm -f expenses.db expenses.db-wal expenses.db-shm
-  install -o "$uid" -g "$uid" -m 0644 /root/restore.db expenses.db
-  rm /root/restore.db
-  systemctl start life-ledger; sleep 4
-  curl -fsS http://127.0.0.1:8080/health'
-```
-
-Then run `systemctl start life-ledger-backup.service` so Drive holds the real data
-(it overwrites the same-day placeholder snapshot), and check the data in the UI.
+was **older** (July): check file dates before choosing the source. When the source
+is a file on your machine rather than a Drive snapshot, `scp` it to the host,
+`pct push 101` it to `/root/restore.db`, and continue from the runbook's gate step.
 
 Old snapshots: only the **monthly** ones (`2026-07`, `2026-08`) were uploaded to
 `gdrive:life-ledger/monthly/` (`rclone copy`, which keeps modification times).

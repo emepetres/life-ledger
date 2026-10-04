@@ -45,7 +45,7 @@ Hetzner (over budget).
 - **Availability is best-effort.** Outages of hours to a day are acceptable for a
   one-user app. The app must come back on its own after a power cut (auto-start on
   boot) — no manual step.
-- **Near-zero data loss (RPO).** The offsite copy is the *only* surviving copy if the
+- **Near-zero data loss (RPO).** _Amended by [ADR-0014](0014-nightly-offsite-snapshot-to-google-drive.md): the RPO is 24 hours, and the offsite copy is any rclone remote, not S3-shaped._ The offsite copy is the *only* surviving copy if the
   drive dies, so every committed write must reach offsite storage — a nightly
   snapshot alone is not enough. With a handful of writes a day this is cheap. *How*
   is left to the durability design.
