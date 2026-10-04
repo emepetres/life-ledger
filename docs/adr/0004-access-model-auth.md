@@ -1,6 +1,6 @@
 # Access model / auth for single-user financial data
 
-**Status:** accepted; the *HTTPS* row is superseded by [ADR-0013](0013-public-ingress-cloudflare-tunnel.md).
+**Status:** accepted; written for Azure Container Apps (gone, ADR-0010); the *HTTPS* row is superseded by [ADR-0013](0013-public-ingress-cloudflare-tunnel.md).
 
 Life Ledger holds the user's **personal financial ledger on the public internet** and is effectively **single-user**. This ADR fixes how the app is protected. The stack is settled ([ADR: stack & architecture](https://github.com/emepetres/life-ledger/issues/2)): a **Go app on Azure Container Apps**, server-rendered `html/template` + htmx, SQLite — one deployable unit that must also **run locally for QA**. That context makes the auth options concrete.
 
@@ -16,7 +16,7 @@ Require **real authentication** (a secret the user supplies, not just a secret i
 | Login mechanism | **Login form + signed session cookie** (not HTTP Basic) — real logout, fits htmx UX, credential sent once. |
 | Session representation | **Signed stateless cookie** (HMAC via a vetted Go lib; no session table). "Log out everywhere" = rotate the signing key — per-session revocation is a non-feature for one user. |
 | Session lifetime | **30-day sliding** expiry, **persistent** cookie. Active use never expires; caps a stolen-cookie window at 30 days without constant re-login. |
-| Password at rest | **bcrypt hash** (`golang.org/x/crypto/bcrypt`) in config (env / Azure secret) — never plaintext. Constant-time compare + slow hashing come for free. |
+| Password at rest | **bcrypt hash** (`golang.org/x/crypto/bcrypt`) in config (was an Azure secret; now the box's `app.env`, ADR-0011) — never plaintext. Constant-time compare + slow hashing come for free. |
 | Brute force | **bcrypt + light per-IP in-memory rate limit** (~5 attempts/min then cooldown) on the login POST. **No hard lockout** (self-lockout risk, over-engineered here). Single-instance → in-memory is fine. |
 | Cookie flags | `HttpOnly` + `SameSite=Lax` **always**; **`Secure` env-conditional** (on in prod, off for local `http://localhost`). |
 | HTTPS | ~~Handled by the **Container Apps platform**~~ — superseded by [ADR-0013](0013-public-ingress-cloudflare-tunnel.md): TLS terminates at Cloudflare's edge via a tunnel. Still no app redirect code. |

@@ -9,6 +9,6 @@
 # Go test/coverage artifacts
 *.out
 
-# First-deploy config: real values live here, never committed. The committed
-# .env.example is the template (scripts/first-deploy.ps1, ADR-0005).
+# Dev-machine operator file: real values live here, never committed. The
+# committed .env.example is the template.
 /.env

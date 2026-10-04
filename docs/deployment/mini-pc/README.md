@@ -5,8 +5,8 @@ How Life Ledger is provisioned on the home mini-PC (Proxmox). Decisions live in
 [ADR-0011](../../adr/0011-runtime-lxc-static-binary.md) (runtime),
 [ADR-0012](../../adr/0012-storage-durability-on-the-box.md) (durability) and
 [ADR-0013](../../adr/0013-public-ingress-cloudflare-tunnel.md) (ingress). This file
-records the *steps*. It supersedes the Azure docs in this folder, which go away
-with the Azure teardown.
+records the *steps*. The backup decision is in
+[ADR-0014](../../adr/0014-nightly-offsite-snapshot-to-google-drive.md).
 
 Commands that run on the mini-PC are `bash`; the ones on the dev machine are
 `pwsh`. Ops files are in [`deploy/minipc/`](../../../deploy/minipc/).
@@ -41,7 +41,7 @@ a password, an account), in this order:
 | --- | --- | --- | --- |
 | 1 | Run `create-guest.sh` on the Proxmox host (type the host password at the `ssh`/`scp` prompts; no key is set up) | step 1 | [#103](https://github.com/emepetres/life-ledger/issues/103), done |
 | 2 | Create the Cloudflare tunnel, copy its token into `.env` and `cloudflared.env` | step 3 | [#103](https://github.com/emepetres/life-ledger/issues/103), done |
-| 3 | Make the GHCR package public | step 5 | [#103](https://github.com/emepetres/life-ledger/issues/103), done |
+| 3 | Make the GHCR package public, and grant the repo "Manage Actions access" on it | step 5 | [#103](https://github.com/emepetres/life-ledger/issues/103), [#106](https://github.com/emepetres/life-ledger/issues/106), done |
 | 4 | Create the Google OAuth client (**In production**, scope `drive.file`) | step 7a | [#104](https://github.com/emepetres/life-ledger/issues/104) |
 | 5 | Authorise rclone in your browser, ship `rclone.conf` to the guest | step 7b | [#104](https://github.com/emepetres/life-ledger/issues/104) |
 | 6 | Create the healthchecks.io check, put the ping URL on the guest | step 7c | [#104](https://github.com/emepetres/life-ledger/issues/104) |
@@ -141,14 +141,8 @@ Then in the guest: `systemctl restart cloudflared` and check
 ## 4. First start needs a DB
 
 `life-ledger.service` has `AssertPathExists=/var/lib/life-ledger/expenses.db`
-(ADR-0012), so it **refuses to start** until a DB is in place. The real restore is
-step 8. To smoke-test the plumbing before then, create an empty
-file the app will migrate:
-
-```bash
-# In the guest. Throwaway DB for the smoke test only: delete it before restoring.
-touch /var/lib/life-ledger/expenses.db
-```
+(ADR-0012), so it **refuses to start** until a DB is in place. On a fresh guest,
+restore the real one first (step 8). The live guest already has it (#104).
 
 ## 5. The binary: GHCR updater
 
@@ -164,12 +158,15 @@ touch /var/lib/life-ledger/expenses.db
    digest. On failure restore `.prev`, restart, and remember the bad digest so it
    is not retried every 5 minutes.
 
-**Prerequisite:** the image must exist on GHCR and the package must be public
-(GitHub → Packages → `life-ledger` → Package settings → Change visibility; there
-is no API for it). The first `:latest` was pushed by hand with `crane append` onto
-`gcr.io/distroless/static-debian12:nonroot` plus `crane mutate` (entrypoint, env,
-`org.opencontainers.image.source` label). The pipeline rewrite will replace that.
-Pushing needs a `gh` token with `write:packages` (`gh auth refresh -h github.com -s write:packages`).
+**Prerequisites:** the image must exist on GHCR. CI publishes it on merge to
+`main` (`ci-cd.yml`), so there is nothing to push by hand. Two one-time human
+steps on the package (GitHub → Packages → `life-ledger`; neither has an API):
+
+- **Package settings → Change visibility → Public**, so the guest can pull with no
+  credentials.
+- **Package settings → Manage Actions access → Add repository**
+  `emepetres/life-ledger` with the **Write** role, so the workflow's `GITHUB_TOKEN`
+  can push to a package that was created outside Actions.
 
 Force a run now: `systemctl start life-ledger-update.service`, then
 `journalctl -u life-ledger-update -n 50`.
@@ -181,8 +178,6 @@ Force a run now: `systemctl start life-ledger-update.service`, then
   `ProtectSystem=strict`, `PrivateTmp`, ...) in the unprivileged guest.
 - `LIFELEDGER_SESSION_KEY` must be set (a random 32-byte Base64 value). It was
   empty in `.env`, so one was minted. Keep it in the password manager.
-- The empty `expenses.db` from step 4 is a throwaway placeholder. Delete it before
-  the real restore.
 
 ## 6. Verify
 
@@ -351,13 +346,55 @@ restoring from a Drive snapshot, the migration gate and the `:<sha>` downgrade.
 For the first start on a fresh guest follow its
 [fresh-guest section](../restore-runbook.md#restoring-onto-a-fresh-guest).
 
-Done 2026-10-04 from the old Azure copy (`ledgerbackup/expenses.db`, 2026-09-12,
+Done 2026-10-04 from the last copy of the old host (2026-09-12,
 85 expenses and 8 incomes, goose version 2). The repo's local `data/expenses.db`
 was **older** (July): check file dates before choosing the source. When the source
 is a file on your machine rather than a Drive snapshot, `scp` it to the host,
 `pct push 101` it to `/root/restore.db`, and continue from the runbook's gate step.
 
+The real DB is in place (#104), so there is no placeholder to clean up.
+
 Old snapshots: only the **monthly** ones (`2026-07`, `2026-08`) were uploaded to
 `gdrive:life-ledger/monthly/` (`rclone copy`, which keeps modification times).
 The old dailies (2026-09-06..12) were **not** uploaded: they are older than 7 days,
 so the next run's prune would delete them. They stay in the local archive.
+
+## Post-merge checklist (#109)
+
+Run by the dev, once, after the Azure-removal work is merged. The agent only
+writes it. The Azure subscription is already deleted, so nothing is torn down in
+Azure: this removes the leftovers in GitHub and on the dev machine.
+
+```pwsh
+# 1. Confirm the app secrets are in the password manager BEFORE deleting the repo
+#    copies: LIFELEDGER_PASSWORD_HASH and LIFELEDGER_SESSION_KEY (step 2), plus the
+#    tunnel token, rclone.conf, OAuth client ID/secret and ping URL (7d).
+Read-Host "Every secret is in the password manager? Press Enter to continue"
+
+# 2. Delete the obsolete repo secrets (leave `LLM_*` and `GH_AW_*` alone).
+$Repo = "emepetres/life-ledger"
+foreach ($Name in "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID",
+                  "AZURE_CI_PRINCIPAL_ID", "LIFELEDGER_PASSWORD_HASH",
+                  "LIFELEDGER_SESSION_KEY") {
+    gh secret delete $Name --repo $Repo
+}
+
+# 3. Delete the obsolete repo variables.
+foreach ($Name in "AZURE_RESOURCE_GROUP", "AZURE_LOCATION") {
+    gh variable delete $Name --repo $Repo
+}
+
+# 4. Check what is left: only `LLM_*` and `GH_AW_*` should remain.
+gh secret list --repo $Repo
+gh variable list --repo $Repo
+
+# 5. Clean the local .env: keep only the keys in .env.example. Anything listed
+#    with "=>" is in .env but not in the template (e.g. SUBSCRIPTION_ID,
+#    RESOURCE_GROUP, LOCATION, REPO, APP_REG_NAME): delete those lines.
+$Keys = { param($Path) Get-Content $Path | Where-Object { $_ -match '^[A-Z_]+=' } | ForEach-Object { $_.Split('=')[0] } }
+Compare-Object (& $Keys .env.example) (& $Keys .env)
+```
+
+- [ ] App secrets confirmed in the password manager.
+- [ ] The six repo secrets and two variables are deleted; `LLM_*` and `GH_AW_*` untouched.
+- [ ] Local `.env` has only the keys listed in `.env.example`.

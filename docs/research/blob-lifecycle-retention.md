@@ -1,5 +1,7 @@
 # Can Blob lifecycle management express the 7-day daily prune?
 
+> **Historical:** the Azure host is gone ([ADR-0010](../adr/0010-host-home-mini-pc.md)). Kept as history; nothing here describes the live system.
+
 Research for [issue #33](https://github.com/emepetres/life-ledger/issues/33), under
 [map #31](https://github.com/emepetres/life-ledger/issues/31). **Advisory** input to the backup ADR — this
 document establishes what the platform does and recommends one option; the decision is recorded elsewhere.

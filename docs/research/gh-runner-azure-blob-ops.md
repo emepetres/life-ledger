@@ -1,5 +1,7 @@
 # Azure CLI blob copy, batch delete, and SQLite checks on a GitHub runner
 
+> **Historical:** the Azure host is gone ([ADR-0010](../adr/0010-host-home-mini-pc.md)). Kept as history; nothing here describes the live system.
+
 Research for [issue #34](https://github.com/emepetres/life-ledger/issues/34), under the wayfinder map
 [#31 (scheduled retained backup of the blob database)](https://github.com/emepetres/life-ledger/issues/31).
 **Advisory** input to the nightly-backup spec: this document establishes what the runner can actually
