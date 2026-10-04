@@ -35,3 +35,7 @@ _Avoid_: Repayment, settlement, reimbursement
 **Net cost** (derived):
 An expense's full Amount minus the sum of its linked paybacks — never stored, computed at display time. May be negative when over-repaid (rendered green). The list surfaces net cost as the headline figure while the stored Amount stays the full amount paid.
 _Avoid_: Balance, remainder, owed
+
+**Splittypie export**:
+A one-off text file listing every **Split** expense dated from a chosen "from" day (inclusive) through today, one splittypie quick-add line per expense (`<YYYY-MM-DD> <amount> <description>`), oldest first, to be retyped by hand into the partner-split app. Each line carries the expense's **Net cost**, not its full Amount; an expense whose net cost is zero or less is left out. Descriptions are cut to splittypie's 50-character limit; account and `*` markers are not carried over. Nothing is remembered about what was exported — re-exporting an overlapping range repeats lines.
+_Avoid_: Sync, splittypie import, share

@@ -95,6 +95,16 @@ button.primary:hover { background: #275e43; }
 .hint { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 12px; }
 .gate-bad { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
 .gate-ok { color: var(--accent); font-size: 12.5px; margin-top: 8px; }
+.export {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+  font-size: 12.5px; color: var(--muted);
+}
+.export input[type="date"] { font: inherit; margin-left: 4px; }
+.notice {
+  margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
+  background: var(--split-soft); color: var(--split); font-size: 13px;
+}
 button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 
 /* ---- live preview ---- */

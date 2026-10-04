@@ -58,7 +58,10 @@ internal/server/     HTTP surface. Routes and handlers for the home page,
                      add/preview (shared by expenses and incomes, branching on the
                      parsed IsIncome flag), kind-qualified edit/delete
                      (/edit/{kind}/{id}, /delete/{kind}/{id}), the pre-linked
-                     payback start (/payback/{expenseID}), login/logout, and the
+                     payback start (/payback/{expenseID}), the Splittypie export
+                     (GET /export/splittypie?from=YYYY-MM-DD — a text download of
+                     Split expenses as splittypie quick-add lines, at net cost;
+                     stateless), login/logout, and the
                      unauthenticated health check. view.go assembles the net-first,
                      day-grouped feed (net cost derived at render time; stored
                      amount stays full) into one discriminated rowView; renders

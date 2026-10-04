@@ -53,6 +53,13 @@ type homeView struct {
 	// LinkedExpenseDesc names the parent in the payback chip ("↩ payback → <desc>")
 	// so the user sees which expense this credit nets down.
 	LinkedExpenseDesc string
+	// ExportFrom pre-fills the Splittypie export form's "from" date (YYYY-MM-DD):
+	// the day just exported from when echoing a notice, else the 1st of the
+	// current month.
+	ExportFrom string
+	// Notice is a one-line message shown above the list — set when a Splittypie
+	// export has nothing to download or its "from" date is invalid.
+	Notice string
 }
 
 // previewView is the view model for the live-preview fragment: the resolved
@@ -267,19 +274,7 @@ type feedItem struct {
 // expense, where the derived net cost (paid − Σ paybacks) nets the parent's
 // contribution to its day total.
 func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.Time) []dayGroup {
-	// Two bulk reads, one in-memory stitch (ADR-0009): bucket the incomes by their
-	// linked_expense_id, so each expense can attach its paybacks; a nil link is a
-	// standalone income that stays a feed row of its own.
-	paybacks := make(map[int64][]expense.Income)
-	var standalone []expense.Income
-	for _, i := range incomes {
-		if i.LinkedExpenseID != nil {
-			id := *i.LinkedExpenseID
-			paybacks[id] = append(paybacks[id], i)
-		} else {
-			standalone = append(standalone, i)
-		}
-	}
+	paybacks, standalone := bucketIncomes(incomes)
 
 	feed := make([]feedItem, 0, len(expenses)+len(standalone))
 	for _, e := range expenses {
@@ -310,7 +305,7 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 					Editable:       expense.Editable(p.Date, now),
 				})
 			}
-			net := e.Amount - sum
+			net := netCost(e, pbs)
 			cost = net
 			row.HasPaybacks = true
 			row.Net = formatNet(net)
@@ -376,6 +371,33 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 		g.Total = formatNet(curTotal)
 	}
 	return groups
+}
+
+// bucketIncomes is the in-memory stitch behind "two bulk reads, one stitch"
+// (ADR-0009): it buckets the incomes by their linked_expense_id, so each expense
+// can attach its paybacks; a nil link is a standalone income, returned apart.
+func bucketIncomes(incomes []expense.Income) (paybacks map[int64][]expense.Income, standalone []expense.Income) {
+	paybacks = make(map[int64][]expense.Income)
+	for _, i := range incomes {
+		if i.LinkedExpenseID != nil {
+			id := *i.LinkedExpenseID
+			paybacks[id] = append(paybacks[id], i)
+		} else {
+			standalone = append(standalone, i)
+		}
+	}
+	return paybacks, standalone
+}
+
+// netCost is an expense's Net cost (CONTEXT.md, ADR-0009): its full Amount less
+// the sum of its linked paybacks — derived, never stored. It may be negative
+// when the expense is over-repaid.
+func netCost(e expense.Expense, paybacks []expense.Income) int {
+	net := e.Amount
+	for _, p := range paybacks {
+		net -= p.Amount
+	}
+	return net
 }
 
 // formatEuro renders integer minor units (cents) as "€X.XX".
