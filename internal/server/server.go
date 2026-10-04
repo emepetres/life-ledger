@@ -151,6 +151,10 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// expense (the link is set out-of-band, never typed). A 404 for an unknown id.
 	mux.HandleFunc("GET /payback/{id}", s.handlePaybackStart)
 
+	// Splittypie export: download the Split expenses from a chosen day through
+	// today as splittypie quick-add lines. A plain GET so it works without JS.
+	mux.HandleFunc("GET /export/splittypie", s.handleSplittypieExport)
+
 	// Home page. Registered last as the catch-all for "/" so unknown paths 404.
 	mux.HandleFunc("GET /{$}", s.handleHome)
 
@@ -300,6 +304,9 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	// what /preview would show for the same state.
 	parsed := expense.Parse(v.Raw, s.now()).GatePayback(v.Payback)
 	v.HTMXSrc = s.htmxSrc
+	if v.ExportFrom == "" {
+		v.ExportFrom = firstOfMonth(s.now()).Format(isoDate)
+	}
 	v.Preview = buildPreview(v.Raw, parsed, false, v.Editing, v.Payback)
 	v.Groups = groupByDay(expenses, incomes, s.now())
 	s.render(w, status, v)

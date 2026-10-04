@@ -142,10 +142,26 @@
             amount first · <b>@account</b> · <b>*</b> ½ split · <b>-N</b> days
             ago · <b>DD/MM</b>
           </p>
+          <!-- Splittypie export: a plain GET so it works without JS; the server
+               answers with a text download, or this page with a notice. -->
+          <form
+            class="export"
+            method="get"
+            action="/export/splittypie"
+            aria-label="Export to splittypie"
+          >
+            <label
+              >from
+              <input type="date" name="from" value="{{ .ExportFrom }}" required
+            /></label>
+            <button class="ghost" type="submit">Export to splittypie</button>
+          </form>
         </section>
 
         <section class="list" aria-label="Expenses">
-          {{ template "list" .Groups }}
+          {{ if .Notice }}
+          <p class="notice" role="status">{{ .Notice }}</p>
+          {{ end }} {{ template "list" .Groups }}
         </section>
       </div>
     </div>
