@@ -42,21 +42,15 @@ internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
 internal/store/      Persistence. A repository over one SQLite file via the
                      pure-Go modernc.org/sqlite driver; owns the self-creating
                      startup path and embedded goose migrations, and sets the
-                     WAL / foreign_keys / busy_timeout pragmas. Two tables:
-                     `expense` and `income` (income.linked_expense_id ->
-                     expense.id ON DELETE CASCADE); a thin per-table repository
-                     (List / ListIncomes + per-record CRUD) — netting and
-                     interleaving are the server's job, not the store's. An
-                     optional Backup sink (WithBackup) makes it durable on
-                     ephemeral storage: a consistent VACUUM INTO snapshot is saved
-                     after each write, and a cold boot restores from it.
-                     (ADR-0003, ADR-0009)
-internal/blobbackup/ Production implementation of store.Backup: a thin adapter
-                     that snapshots the SQLite database to a single Azure Blob
-                     (managed identity, no account key) and restores it on a cold
-                     boot. The one place the Azure SDK enters the binary — every
-                     test runs against in-process fakes of the same seam — so
-                     local QA and CI stay zero-config and offline. (ADR-0003)
+                     WAL / foreign_keys / synchronous=FULL / busy_timeout
+                     pragmas. Two tables: `expense` and `income`
+                     (income.linked_expense_id -> expense.id ON DELETE CASCADE);
+                     a thin per-table repository (List / ListIncomes +
+                     per-record CRUD) — netting and interleaving are the
+                     server's job, not the store's. The binary has no backup
+                     role (ADR-0012): it opens a local file and logs whether it
+                     was "created new" or "opened existing".
+                     (ADR-0003, ADR-0009, ADR-0012)
 internal/auth/       Access control. The protective middleware, the HMAC-signed
                      stateless session cookie, and a per-IP in-memory login rate
                      limiter. (ADR-0004)
@@ -81,27 +75,18 @@ flowchart TD
     server["internal/server<br/>(HTTP handlers, templates)"]
     auth["internal/auth<br/>(guard, session, rate limit)"]
     store["internal/store<br/>(SQLite repository)"]
-    blobbackup["internal/blobbackup<br/>(Azure Blob store.Backup sink)"]
     expense["internal/expense<br/>(parser + Expense record)"]
     web["web<br/>(embedded templates + htmx)"]
 
     main --> server
     main --> auth
     main --> store
-    main --> blobbackup
     server --> auth
     server --> store
     server --> expense
     server --> web
     store --> expense
-    blobbackup --> store
 ```
-
-`internal/blobbackup` is wired only in `cmd/life-ledger`: when
-`LIFELEDGER_BACKUP_BLOB_URL` is set, `main` constructs the Blob `Sink` and injects
-it via `store.WithBackup`. It depends on `internal/store` only to implement that
-package's `Backup` interface — the store never depends back on it, so the SDK stays
-out of the persistence core and out of every test.
 
 `internal/expense` is the leaf domain package — everything depends inward on it,
 and it depends on nothing. The `server` package defines its own narrow `Store`
@@ -224,7 +209,6 @@ flowchart LR
 | --- | --- | --- |
 | `LIFELEDGER_ADDR` | default `:8080` | Listen address. |
 | `LIFELEDGER_DB_PATH` | Bicep → `/data/expenses.db` | SQLite file on the mounted volume. |
-| `LIFELEDGER_BACKUP_BLOB_URL` | Bicep → storage container URL | Azure Blob container for backup-on-write / restore-on-boot (managed identity). Unset locally/CI → no sink, pure local file, no Azure call. |
 | `LIFELEDGER_PASSWORD_HASH` | ACA secret | bcrypt hash of the shared password (required). |
 | `LIFELEDGER_SESSION_KEY` | ACA secret | Session-cookie signing secret (required in prod). |
 | `LIFELEDGER_SECURE_COOKIE` | Bicep → `true` | `Secure` flag on the session cookie. |

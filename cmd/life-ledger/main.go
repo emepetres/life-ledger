@@ -19,7 +19,6 @@ import (
 	_ "time/tzdata"
 
 	"github.com/emepetres/life-ledger/internal/auth"
-	"github.com/emepetres/life-ledger/internal/blobbackup"
 	"github.com/emepetres/life-ledger/internal/server"
 	"github.com/emepetres/life-ledger/internal/store"
 )
@@ -42,21 +41,7 @@ func main() {
 		dbPath = store.DefaultDBPath
 	}
 
-	// Durability seam (ADR-0003): selecting the backup sink is configuration, not
-	// code. With LIFELEDGER_BACKUP_BLOB_URL set (production on ephemeral storage),
-	// wire the Azure Blob sink so the store backs up after every write and restores
-	// on a cold boot. Unset (local QA, CI), no sink is wired — the store is a pure
-	// local file and no Azure credential or network call is ever involved.
-	var opts []store.Option
-	if blobURL := os.Getenv("LIFELEDGER_BACKUP_BLOB_URL"); blobURL != "" {
-		sink, err := blobbackup.New(blobURL)
-		if err != nil {
-			log.Fatalf("configuring blob backup: %v", err)
-		}
-		opts = append(opts, store.WithBackup(sink))
-	}
-
-	st, err := store.Open(dbPath, opts...)
+	st, err := store.Open(dbPath)
 	if err != nil {
 		log.Fatalf("opening database: %v", err)
 	}
