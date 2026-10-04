@@ -32,3 +32,6 @@ Makefile   text
 *.gz  binary
 
 .github/workflows/*.lock.yml linguist-generated=true merge=ours
+
+# Ops files run on the Linux mini-PC: never CRLF.
+deploy/** text eol=lf
