@@ -16,6 +16,14 @@ example `ssh root@192.168.1.167` then `pct enter 101`.
 > **Scope.** Data damage and box loss. The RPO is 24 hours (ADR-0014): the newest
 > snapshot is at most one night old, so anything written since 03:00 is lost.
 
+> **Dry-read 2026-10-04 against CT 101.** Unit and timer names, the
+> `/var/lib/life-ledger` symlink into `/var/lib/private/life-ledger`, the dynamic
+> uid lookup, `rclone`/`sqlite3` on the guest, listing and downloading
+> `daily/` and `monthly/` through `gdrive:life-ledger`, the three-check gate (it
+> passed on the newest daily, goose version 2, 85 expenses) and
+> `LIFELEDGER_IMAGE` in the updater all matched. The stop/swap/start steps and the
+> pin drop-in were read, not executed, so the live app stayed up.
+
 ## Names used below
 
 | What | Value |
