@@ -32,6 +32,10 @@ _Avoid_: Credit, refund, deposit
 An Income linked to a specific Expense (`linked_expense_id`), recording money received back against a fronted group ticket. Carries its own date and own account, both independent of the parent — you can front from one account and be repaid into another, on another day. A standalone income has no such link; a payback is the linked case. A payback displays **green with a leading `−`** (it claws back part of a specific expense), unlike a standalone income's blue no-`−` treatment.
 _Avoid_: Repayment, settlement, reimbursement
 
+**Intent**:
+What the user is doing with an entry line: adding a new record, adding a **Payback** to a specific Expense, or editing a specific existing Expense or Income. The intent decides which kind of record the line may become. A plain add accepts either kind (the `+` decides). A Payback must be an Income. An edit keeps the record's kind, so a line whose `+` disagrees with it is refused rather than converted, and an edited Payback stays linked to the same Expense. Only records still within the edit window (see Canonical entry line) can be the target of an edit intent.
+_Avoid_: Mode, action, context
+
 **Net cost** (derived):
 An expense's full Amount minus the sum of its linked paybacks — never stored, computed at display time. May be negative when over-repaid (rendered green). The list surfaces net cost as the headline figure while the stored Amount stays the full amount paid.
 _Avoid_: Balance, remainder, owed

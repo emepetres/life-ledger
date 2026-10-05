@@ -170,6 +170,33 @@ mirrors the refusal for the no-JS path. It is handled by the existing
 lenient-parse / gate-on-save machinery — no new control flow, exactly like
 `*`-on-income.
 
+## Amendment — an edit keeps the record's kind (reject, don't convert)
+
+§ "Decisions" point 5 makes an income editable exactly like an expense and says
+an edit never re-parents a payback, but it was silent on an edit whose line
+**changes kind**. In practice the edit route fixed the kind and quietly
+discarded the conflicting marker. A `+40 x` saved over an expense stayed an
+expense with the `+` lost, and a `40 refund` saved over an income stayed an
+income with the missing `+` ignored. This amendment closes that gap:
+
+- An edit **keeps the record's kind**. Editing an **expense** with a line that
+  parses as an income (leading `+`) is a save-gate violation. So is editing an
+  **income** (standalone or payback) with a line that does not.
+- The violation is **refused, not converted**. To change kind, the user deletes
+  the record and adds a new one.
+- The live preview and the server agree, as for every other save gate: Save is
+  disabled in the preview, and the edit handler rejects the line with 422 for
+  the no-JS path. An edited payback previews as a payback (green, leading `−`),
+  not as a standalone income.
+
+**Why reject rather than convert.** Converting would move the row between the
+`expense` and `income` tables. It would get a new ID, and converting an expense
+would cascade-delete its paybacks. That breaks ADR-0008's premise that an edit
+is the same record re-parsed from its canonical entry line, and it would destroy
+data as a side effect of a typo. The kind joins the payback link as something
+fixed outside the entry line, which mirrors the payback-must-stay-an-income rule
+above.
+
 ## Store query shape
 
 The store stays a **thin per-table repository**; the server assembles the netted,

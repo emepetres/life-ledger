@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -143,15 +144,25 @@ func TestAddPaybackOverRepaidGreenNetStoredAmountUnchanged(t *testing.T) {
 	}
 }
 
+// seedParent adds an expense to log paybacks against and returns its id as the
+// hidden linked_expense_id form value. The preview loads the parent to build the
+// payback Intent (#113), so a payback-mode preview needs a real one.
+func seedParent(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	_, added := postAdd(t, ts, "90 team lunch")
+	return strconv.FormatInt(paybackParentID(t, added), 10)
+}
+
 // AC (#62): while a payback link is active, the live preview refuses a
 // non-income line — a payback must keep its leading '+' — surfacing the new
 // gate message and disabling Save, mirroring the existing '*'-on-income gate.
 func TestPreviewPaybackGateBlocksNonIncome(t *testing.T) {
 	ts := newTestServer(t)
+	parent := seedParent(t, ts)
 
 	_, body := postForm(t, ts, "/preview", url.Values{
 		"raw":               {"30 lunch"},
-		"linked_expense_id": {"1"},
+		"linked_expense_id": {parent},
 	})
 	if !strings.Contains(body, "a payback must keep its") {
 		t.Errorf("payback preview without '+' should surface the gate message; got:\n%s", body)
@@ -165,10 +176,11 @@ func TestPreviewPaybackGateBlocksNonIncome(t *testing.T) {
 // no error, Save stays enabled.
 func TestPreviewPaybackGateAllowsIncome(t *testing.T) {
 	ts := newTestServer(t)
+	parent := seedParent(t, ts)
 
 	_, body := postForm(t, ts, "/preview", url.Values{
 		"raw":               {"+30 Bob share"},
-		"linked_expense_id": {"1"},
+		"linked_expense_id": {parent},
 	})
 	if strings.Contains(body, "a payback must keep its") {
 		t.Errorf("a valid payback line should not surface the gate message; got:\n%s", body)
@@ -183,10 +195,11 @@ func TestPreviewPaybackGateAllowsIncome(t *testing.T) {
 // preview colours by link state.
 func TestPreviewPaybackModeShowsGreenCreditChip(t *testing.T) {
 	ts := newTestServer(t)
+	parent := seedParent(t, ts)
 
 	_, body := postForm(t, ts, "/preview", url.Values{
 		"raw":               {"+30 Bob share"},
-		"linked_expense_id": {"1"},
+		"linked_expense_id": {parent},
 	})
 	if !strings.Contains(body, "−€30.00") {
 		t.Errorf("payback-mode preview should show the green −€30.00 credit chip; got:\n%s", body)

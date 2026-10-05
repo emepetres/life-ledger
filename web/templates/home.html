@@ -78,24 +78,30 @@
     <div class="wrap">
       <div class="shell">
         <section
-          class="entry{{ if .Editing }} editing{{ end }}"
+          class="entry{{ if .Intent.IsEdit }} editing{{ end }}"
           aria-label="Quick add"
         >
           <h2>
-            {{ if .Editing }}Edit {{ if .Income }}income{{ else }}expense{{ end
-            }}{{ else if .Payback }}Quick add — payback{{ else }}Quick add{{ end
-            }}
+            {{ if .Intent.IsEdit }}Edit {{ if .Intent.EditsIncome }}income{{ else
+            }}expense{{ end }}{{ else if .Intent.AddsPayback }}Quick add —
+            payback{{ else }}Quick add{{ end }}
           </h2>
           <form method="post" action="{{ .FormAction }}" autocomplete="off">
-            {{ if .Payback }}
+            {{ if .Intent.IsEdit }}
+            <!-- The edit target rides along with every /preview swap (htmx
+                 posts the input's whole form) so the preview submits the line
+                 under the same edit Intent as the save (#113). -->
+            <input type="hidden" name="kind" value="{{ .EditKind }}" />
+            <input type="hidden" name="id" value="{{ .Intent.ID }}" />
+            {{ end }} {{ if .Intent.AddsPayback }}
             <input
               type="hidden"
               name="linked_expense_id"
-              value="{{ .LinkedExpenseID }}"
+              value="{{ .Intent.LinkedExpenseID }}"
             />
             <div class="payback-banner">
               <span class="chip link"
-                >↩ payback → {{ .LinkedExpenseDesc }}</span
+                >↩ payback → {{ .Intent.ParentDescription }}</span
               >
               <a class="ghost cancel" href="/">Cancel</a>
             </div>
@@ -112,14 +118,6 @@
               hx-trigger="input changed delay:150ms, load"
               hx-target="#preview"
               hx-swap="innerHTML"
-              {{
-              if
-              .Editing
-              }}
-              hx-vals='{"edit": "1"}'
-              {{
-              end
-              }}
             />
             <!-- Caret-to-end: when the box loads pre-filled (payback start's
                  leading '+', or the edit flow's canonical line, ADR-0009/#62),
