@@ -22,19 +22,21 @@ type homeView struct {
 	// HTMXSrc is the local URL of the vendored, version-pinned htmx script.
 	HTMXSrc string
 	// Raw is the submitted line echoed back so a rejected entry stays in the box.
-	// In edit mode it is pre-filled with the edited row's original raw_text.
+	// Under an edit Intent it is pre-filled with the record's canonical entry
+	// line, never its verbatim raw_text (ADR-0008).
 	Raw string
-	// FormAction is where the quick-add form posts: "/add" normally, or
-	// "/edit/{kind}/{id}" while editing that row in place.
+	// Intent is what the quick-add box is doing: a plain add, adding a payback
+	// to a parent expense, or editing an existing record (CONTEXT.md). The form
+	// chrome — heading, payback banner, hidden fields, save label — all derive
+	// from it, so a render can't disagree with what a save would do.
+	Intent expense.Intent
+	// FormAction is where the quick-add form posts, derived from Intent by
+	// renderHome: "/add", or "/edit/{kind}/{id}" while editing that record.
 	FormAction string
-	// Editing is true when the quick-add box is editing an existing record
-	// rather than adding a new one. It highlights the form, relabels the save
-	// control, and reveals the cancel affordance.
-	Editing bool
-	// Income is true when the record being edited is an income rather than an
-	// expense, so the edit-mode heading names the right kind (ADR-0009). It is
-	// meaningful only when Editing is true.
-	Income bool
+	// EditKind is the {kind} of the record being edited ("expense" or
+	// "income"), posted as a hidden field so /preview can rebuild the same edit
+	// Intent; empty when not editing.
+	EditKind string
 	// Preview is the live-preview fragment rendered inline for the current Raw,
 	// so a no-JS load (and a save-gate rejection) shows the same preview htmx
 	// would swap in. It is non-interactive here — the save control stays enabled
@@ -42,17 +44,6 @@ type homeView struct {
 	Preview previewView
 	// Groups is the list, newest day first, each with its rows and day total.
 	Groups []dayGroup
-	// Payback is true when the box was opened via a row's "+ payback" action
-	// (GET /payback/{expenseID}): it reveals the non-editable payback chip and
-	// carries the hidden LinkedExpenseID so the income saved from this box is
-	// linked to its parent out-of-band, never through the entry text (ADR-0009).
-	Payback bool
-	// LinkedExpenseID is the parent expense a payback links to, rendered as a
-	// hidden form field; meaningful only when Payback is true.
-	LinkedExpenseID int64
-	// LinkedExpenseDesc names the parent in the payback chip ("↩ payback → <desc>")
-	// so the user sees which expense this credit nets down.
-	LinkedExpenseDesc string
 	// ExportFrom pre-fills the Splittypie export form's "from" date (YYYY-MM-DD):
 	// the day just exported from when echoing a notice, else the 1st of the
 	// current month.
@@ -105,25 +96,25 @@ type previewView struct {
 	Editing bool
 }
 
-// buildPreview turns a parsed entry into the preview fragment's view model. When
+// buildPreview turns a Submission into the preview fragment's view model. When
 // interactive (an htmx /preview swap), the save control is disabled for a blank
 // or invalid entry; on the inline home render it is left enabled so a no-JS
-// submit still reaches the server-side save gate. editing relabels the save
-// control and reveals the cancel affordance, carried through so live swaps during
-// an edit keep the edit-mode chrome. paybackActive is whether a payback link is
-// currently active (the hidden linked_expense_id is present): it decides whether
-// a '+' line previews as a payback (green, '−') or a standalone income (blue, no
-// '−'), mirroring the same distinction GatePayback enforces on save (ADR-0009
-// amendment, #59/#63).
-func buildPreview(raw string, p expense.ParsedEntry, interactive, editing, paybackActive bool) previewView {
+// submit still reaches the server-side save gate. The Intent the line was
+// submitted under carries the rest of the chrome: an edit relabels the save
+// control and reveals the cancel affordance, and a payback — added or edited —
+// previews a '+' line as the green '−' credit rather than a blue standalone
+// income (ADR-0009 amendment, #59/#63).
+func buildPreview(raw string, in expense.Intent, sub expense.Submission, interactive bool) previewView {
+	editing := in.IsEdit()
 	if strings.TrimSpace(raw) == "" {
 		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
 	}
+	p := sub.Parsed
 	account, isDefault := accountDisplay(p.Account)
 	v := previewView{
 		HasAmount:      p.HasAmount,
 		IsIncome:       p.IsIncome,
-		IsPayback:      p.IsIncome && paybackActive,
+		IsPayback:      p.IsIncome && in.IsPayback(),
 		DateLabel:      p.Date.Format(dayLabelLayout),
 		Description:    p.Description,
 		Account:        account,
@@ -131,7 +122,7 @@ func buildPreview(raw string, p expense.ParsedEntry, interactive, editing, payba
 		// An income is never split, so suppress the badge even if the line carried a
 		// stray '*' (which the save gate rejects anyway, ADR-0009).
 		Split:   p.Split && !p.IsIncome,
-		Errors:  errorMessages(p.Errors),
+		Errors:  errorMessages(p.Errors, in),
 		Editing: editing,
 	}
 	if p.HasAmount {
@@ -142,7 +133,7 @@ func buildPreview(raw string, p expense.ParsedEntry, interactive, editing, payba
 		}
 	}
 	if interactive {
-		v.DisableSave = !p.OK()
+		v.DisableSave = !sub.OK()
 	}
 	return v
 }

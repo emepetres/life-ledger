@@ -36,9 +36,15 @@ internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
                      and the Expense and Income records — two public types over a
                      shared unexported `entry` base; an Income is an expense-but-
                      negative, minus the `*` split marker, and a Payback is an
-                     Income linked to an Expense. Pure functions, no I/O — the
-                     single source of parse truth shared by the add, edit, and
-                     preview paths. (ADR-0001, ADR-0002, ADR-0009)
+                     Income linked to an Expense. The entry gate:
+                     Submit(Intent, raw, today) parses the line and applies the
+                     Intent's kind rules (add, add payback, edit expense, edit
+                     income — an edit keeps the record's kind; the edit window
+                     lives on the edit Intents), returning the ready-to-store
+                     record or the save-gate errors. Pure functions, no I/O —
+                     the single source of parse and kind truth shared by the
+                     add, edit, and preview paths. (ADR-0001, ADR-0002,
+                     ADR-0008, ADR-0009)
 internal/store/      Persistence. A repository over one SQLite file via the
                      pure-Go modernc.org/sqlite driver; owns the self-creating
                      startup path and embedded goose migrations, and sets the
@@ -55,9 +61,11 @@ internal/auth/       Access control. The protective middleware, the HMAC-signed
                      stateless session cookie, and a per-IP in-memory login rate
                      limiter. (ADR-0004)
 internal/server/     HTTP surface. Routes and handlers for the home page,
-                     add/preview (shared by expenses and incomes, branching on the
-                     parsed IsIncome flag), kind-qualified edit/delete
-                     (/edit/{kind}/{id}, /delete/{kind}/{id}), the pre-linked
+                     add/preview, and one kind-qualified edit path plus delete
+                     (/edit/{kind}/{id}, /delete/{kind}/{id}) — each rebuilds
+                     the box's Intent (form hidden fields or route) and stores
+                     whatever record expense.Submit returns, so preview and
+                     save can't disagree; the pre-linked
                      payback start (/payback/{expenseID}), the Splittypie export
                      (GET /export/splittypie?from=YYYY-MM-DD — a text download of
                      Split expenses as splittypie quick-add lines, at net cost;

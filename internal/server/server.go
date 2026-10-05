@@ -183,7 +183,7 @@ func unauthenticatedOK(r *http.Request) bool {
 // handleHome renders the full page: the quick-add form (in add mode) and the
 // day-grouped list.
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	s.renderForm(w, r, http.StatusOK, "", addAction, false)
+	s.renderHome(w, r, http.StatusOK, homeView{Intent: expense.Add()})
 }
 
 // handleLoginForm renders the login page. An already-authenticated visitor is
@@ -229,63 +229,35 @@ func (s *Server) renderLogin(w http.ResponseWriter, status int, errMsg string) {
 }
 
 // handlePreview renders the live-preview fragment for the in-progress line. It
-// runs the same parser as the add path (the single source of parse truth), so
-// the preview shows exactly what would be stored, and disables the save control
-// on an invalid entry. Always answers 200 — a "bad" entry is a valid preview.
+// submits the line under the same Intent the save would use — the box's edit
+// target (kind + id) or payback parent (linked_expense_id) ride along as hidden
+// fields of the same form, which htmx includes automatically — so the preview
+// shows exactly what would be stored and disables the save control on any
+// save-gate violation, kind rules included. Always answers 200 — a "bad" entry
+// is a valid preview; an Intent that can no longer be built (a vanished or
+// too-old record, a deleted payback parent) previews under the plain add Intent
+// and leaves the refusal to the save.
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	raw := r.PostFormValue("raw")
-	// The quick-add box sends edit=1 while editing (via hx-vals) so a live swap
-	// keeps the "Save changes" label and cancel affordance instead of reverting
-	// to the add-mode "Add" control on every keystroke.
-	editing := r.PostFormValue("edit") != ""
-	// The hidden linked_expense_id, when present, rides along automatically:
-	// htmx includes every named field of the input's closest form in the
-	// request, and that hidden field lives in the same form as the quick-add
-	// input (ADR-0009 amendment, #62).
-	linked := linkedExpenseID(r) != nil
-	parsed := expense.Parse(raw, s.now()).GatePayback(linked)
-	s.renderPartial(w, "preview", buildPreview(raw, parsed, true, editing, linked))
-}
-
-// renderForm renders the home page with the given status and plain quick-add
-// form state: the echoed raw line, where the form posts (addAction, or an
-// /edit/expense/{id} action in edit mode), and the edit-mode flag. It is the
-// entry point for the expense-side full-page renders — plain home, save-gate
-// rejection, and the expense edit form — delegating to renderHome for the shared
-// list/group/render. The income edit form renders through renderIncomeEditForm
-// instead, since it also carries the kind-aware Income flag (ADR-0009).
-func (s *Server) renderForm(w http.ResponseWriter, r *http.Request, status int, raw, formAction string, editing bool) {
-	s.renderHome(w, r, status, homeView{
-		Raw:        raw,
-		FormAction: formAction,
-		Editing:    editing,
-	})
-}
-
-// renderIncomeEditForm renders the home page with the quick-add box in income
-// edit mode: the canonical line echoed into the box, the kind-qualified income
-// edit action, and the Income flag so the edit heading names the right kind
-// (ADR-0009). It is renderForm's income twin, sharing the one homeView shape
-// across both the GET form load and the save-gate re-render.
-func (s *Server) renderIncomeEditForm(w http.ResponseWriter, r *http.Request, status int, raw string, id int64) {
-	s.renderHome(w, r, status, homeView{
-		Raw:        raw,
-		FormAction: editAction(kindIncome, id),
-		Editing:    true,
-		Income:     true,
-	})
+	in, err := s.previewIntent(r)
+	if err != nil {
+		in = expense.Add()
+	}
+	sub := expense.Submit(in, raw, s.now())
+	s.renderPartial(w, "preview", buildPreview(raw, in, sub, true))
 }
 
 // renderHome loads the list, groups it by day, and renders the home page from a
-// partly-built homeView — filling in the shared chrome (htmx src, inline
-// preview, day groups) around whatever form state the caller set (plain add,
-// edit, or payback). Every full-page render flows through here, so the
-// list/group/render path lives in one place. The inline preview is built
-// non-interactively so the save control stays enabled for a no-JS submit.
+// partly-built homeView — filling in the shared chrome (htmx src, form action,
+// inline preview, day groups) around whatever form state the caller set: the
+// echoed line and the Intent (plain add, payback, or edit). Every full-page
+// render flows through here, so the list/group/render path lives in one place.
+// The inline preview is built non-interactively so the save control stays
+// enabled for a no-JS submit.
 func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, v homeView) {
 	expenses, err := s.store.List(r.Context())
 	if err != nil {
@@ -299,94 +271,65 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// v.Payback carries whether this render's box is in payback mode (ADR-0009
-	// amendment, #62); the gate is reapplied here so the inline preview matches
-	// what /preview would show for the same state.
-	parsed := expense.Parse(v.Raw, s.now()).GatePayback(v.Payback)
 	v.HTMXSrc = s.htmxSrc
+	v.FormAction = formAction(v.Intent)
+	if v.Intent.IsEdit() {
+		v.EditKind = routeKind(v.Intent)
+	}
 	if v.ExportFrom == "" {
 		v.ExportFrom = firstOfMonth(s.now()).Format(isoDate)
 	}
-	v.Preview = buildPreview(v.Raw, parsed, false, v.Editing, v.Payback)
+	v.Preview = buildPreview(v.Raw, v.Intent, expense.Submit(v.Intent, v.Raw, s.now()), false)
 	v.Groups = groupByDay(expenses, incomes, s.now())
 	s.render(w, status, v)
 }
 
-// handleAdd parses the submitted line, re-validates the save gate on the server
-// (so an entry that skipped the client is still refused), and persists a valid
-// expense. On success it redirects back to the home page (Post/Redirect/Get) so
-// the new row shows without a resubmittable POST in history; on a save-gate
-// violation it re-renders the page with the offending text and error messages at
-// 422, storing nothing.
+// handleAdd submits the line under the add Intent — a payback when the box was
+// opened via a row's "+ payback" (the hidden linked_expense_id), else a plain
+// add — re-validating the save gate on the server so an entry that skipped the
+// client is still refused, and persists whichever record the line became. On
+// success it redirects home (Post/Redirect/Get); on a save-gate violation it
+// re-renders the page at 422 with the offending text, still under the same
+// Intent so a payback keeps its banner and hidden link, storing nothing. A
+// payback whose parent no longer exists is a 409 back under the plain add
+// Intent, with a note.
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	raw := r.PostFormValue("raw")
-	// A hidden linked_expense_id — present only when the box was opened via a
-	// row's "+ payback" — links the saved income to its parent out-of-band,
-	// making it a payback; absent, it stores as a standalone income with a nil
-	// link. Read once so the gate check and the eventual save agree.
-	linkedID := linkedExpenseID(r)
-
-	// A '+' line is an income (ADR-0009). The '*'-on-income case never reaches
-	// the store because the save gate above rejects it (ErrSplitOnIncome); a
-	// payback link on a non-income line is rejected the same way
-	// (ErrPaybackNotIncome, ADR-0009 amendment #62) — a payback can't silently
-	// fall through and save as an unlinked expense.
-	parsed := expense.Parse(raw, s.now()).GatePayback(linkedID != nil)
-	if !parsed.OK() {
-		s.renderAddRejected(w, r, raw, linkedID)
+	in, err := s.addIntent(r)
+	switch {
+	case errors.Is(err, errParentGone):
+		s.renderHome(w, r, http.StatusConflict, homeView{
+			Raw:    raw,
+			Intent: expense.Add(),
+			Notice: "That expense no longer exists, so the payback wasn't saved.",
+		})
 		return
-	}
-
-	if parsed.IsIncome {
-		income := newIncome(parsed, raw)
-		income.LinkedExpenseID = linkedID
-		if err := s.store.CreateIncome(r.Context(), income); err != nil {
-			log.Printf("creating income: %v", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-
-	if err := s.store.Create(r.Context(), newExpense(parsed, raw)); err != nil {
-		log.Printf("creating expense: %v", err)
+	case err != nil:
+		log.Printf("loading payback parent: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-// renderAddRejected re-renders the quick-add box after a server-side save-gate
-// refusal on /add, at 422. When the rejected submission carried a payback link,
-// it reloads the parent so the payback banner and hidden linked_expense_id
-// survive the re-render — otherwise the box would silently drop back to plain
-// add mode and the user's next submit would save an unlinked entry instead of
-// fixing the payback (ADR-0009 amendment, #62). A parent that no longer exists
-// degrades to a plain rejection rather than a 500: the link is already gone, so
-// there is nothing left to re-show.
-func (s *Server) renderAddRejected(w http.ResponseWriter, r *http.Request, raw string, linkedID *int64) {
-	if linkedID == nil {
-		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
+	sub := expense.Submit(in, raw, s.now())
+	if !sub.OK() {
+		s.renderHome(w, r, http.StatusUnprocessableEntity, homeView{Raw: raw, Intent: in})
 		return
 	}
-	parent, err := s.store.Get(r.Context(), *linkedID)
+	if sub.Income != nil {
+		err = s.store.CreateIncome(r.Context(), sub.Income)
+	} else {
+		err = s.store.Create(r.Context(), sub.Expense)
+	}
 	if err != nil {
-		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, addAction, false)
+		log.Printf("creating record: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.renderHome(w, r, http.StatusUnprocessableEntity, homeView{
-		Raw:               raw,
-		FormAction:        addAction,
-		Payback:           true,
-		LinkedExpenseID:   *linkedID,
-		LinkedExpenseDesc: parent.Description,
-	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // addAction is the quick-add form's action in add mode; edit mode swaps in an
@@ -406,9 +349,106 @@ func editAction(kind string, id int64) string {
 	return "/edit/" + kind + "/" + strconv.FormatInt(id, 10)
 }
 
+// formAction is where the quick-add form posts under the Intent: the record's
+// kind-qualified edit endpoint while editing, else /add.
+func formAction(in expense.Intent) string {
+	if !in.IsEdit() {
+		return addAction
+	}
+	return editAction(routeKind(in), in.ID())
+}
+
+// routeKind is the {kind} route value of the record an edit Intent targets.
+func routeKind(in expense.Intent) string {
+	if in.EditsIncome() {
+		return kindIncome
+	}
+	return kindExpense
+}
+
+// errParentGone and errNotEditable are the ways building an Intent from request
+// state can fail, besides a missing edit target (store.ErrNotFound).
+var (
+	// errParentGone: a payback's parent expense no longer exists.
+	errParentGone = errors.New("payback parent no longer exists")
+	// errNotEditable: the edit target is past the edit window (ADR-0008).
+	errNotEditable = errors.New("record too old to edit")
+)
+
+// editIntent loads the record an edit targets and builds its edit Intent,
+// returning the record's canonical entry line too — what fills the box, never
+// the verbatim raw_text, so re-parsing on save can't shift its date (ADR-0008).
+// It fails with store.ErrNotFound for an unknown id and errNotEditable past the
+// edit window.
+func (s *Server) editIntent(ctx context.Context, kind string, id int64) (expense.Intent, string, error) {
+	if kind == kindIncome {
+		i, err := s.store.GetIncome(ctx, id)
+		if err != nil {
+			return expense.Intent{}, "", err
+		}
+		in, ok := expense.EditIncome(i, s.now())
+		if !ok {
+			return expense.Intent{}, "", errNotEditable
+		}
+		return in, i.EntryLine(), nil
+	}
+	e, err := s.store.Get(ctx, id)
+	if err != nil {
+		return expense.Intent{}, "", err
+	}
+	in, ok := expense.EditExpense(e, s.now())
+	if !ok {
+		return expense.Intent{}, "", errNotEditable
+	}
+	return in, e.EntryLine(), nil
+}
+
+// previewIntent rebuilds the quick-add box's Intent for a /preview swap from
+// its posted hidden fields: an edit target (kind + id) wins, else the same add
+// Intent /add would build. It mirrors exactly what the save would submit under,
+// so the preview can't drift from the save.
+func (s *Server) previewIntent(r *http.Request) (expense.Intent, error) {
+	kind := r.PostFormValue("kind")
+	if id, err := strconv.ParseInt(r.PostFormValue("id"), 10, 64); err == nil && id > 0 && (kind == kindExpense || kind == kindIncome) {
+		in, _, err := s.editIntent(r.Context(), kind, id)
+		return in, err
+	}
+	return s.addIntent(r)
+}
+
+// addIntent builds the Intent of a submission to /add: adding a payback when the
+// box carries a hidden linked_expense_id, else a plain add. It never builds an
+// edit Intent — /add only ever creates. A payback whose parent is gone fails
+// with errParentGone.
+func (s *Server) addIntent(r *http.Request) (expense.Intent, error) {
+	linked := linkedExpenseID(r)
+	if linked == nil {
+		return expense.Add(), nil
+	}
+	parent, err := s.store.Get(r.Context(), *linked)
+	if errors.Is(err, store.ErrNotFound) {
+		return expense.Intent{}, errParentGone
+	}
+	if err != nil {
+		return expense.Intent{}, err
+	}
+	return expense.AddPayback(parent), nil
+}
+
+// respondEditErr maps an editIntent failure to an HTTP response: an unknown id
+// is a 404, a record past the edit window a 403 (ADR-0008), anything else a
+// logged 500. It reports whether it wrote one.
+func respondEditErr(w http.ResponseWriter, r *http.Request, id int64, err error) bool {
+	if errors.Is(err, errNotEditable) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return true
+	}
+	return respondStoreErr(w, r, "loading record for edit", id, err)
+}
+
 // handleEditForm loads a record's canonical entry line back into the quick-add
-// box in edit mode, switching store method by the {kind} path value. An unknown
-// or non-numeric id is a 404, as is an unrecognised kind.
+// box under its edit Intent, for either {kind}. An unknown id or kind is a 404;
+// a record too old to edit (ADR-0008) is a 403.
 func (s *Server) handleEditForm(w http.ResponseWriter, r *http.Request) {
 	kind, ok := parseKind(w, r)
 	if !ok {
@@ -418,54 +458,22 @@ func (s *Server) handleEditForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if kind == kindIncome {
-		s.editFormIncome(w, r, id)
+	in, line, err := s.editIntent(r.Context(), kind, id)
+	if respondEditErr(w, r, id, err) {
 		return
 	}
-	s.editFormExpense(w, r, id)
+	s.renderHome(w, r, http.StatusOK, homeView{Raw: line, Intent: in})
 }
 
-// editFormExpense loads the expense's canonical entry line into the quick-add box
-// in edit mode, reusing the same inline preview + save gate as adding. An unknown
-// id is a 404; an expense too old to edit (ADR-0008) is a 403.
-func (s *Server) editFormExpense(w http.ResponseWriter, r *http.Request, id int64) {
-	e, err := s.store.Get(r.Context(), id)
-	if respondStoreErr(w, r, "loading expense for edit", id, err) {
-		return
-	}
-	if !expense.Editable(e.Date, s.now()) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	// Edit the canonical entry line rendered from the stored fields, not the
-	// verbatim raw_text: its date is absolute, so re-parsing on save can't shift
-	// it (ADR-0008).
-	s.renderForm(w, r, http.StatusOK, e.EntryLine(), editAction(kindExpense, id), true)
-}
-
-// editFormIncome is editFormExpense's income twin: it loads the income's
-// canonical entry line (the leading '+' sigil and all) into the box, capped by
-// the same Editable cutoff (ADR-0008). A payback's parent link is not expressible
-// in the line and is preserved out-of-band on save (ADR-0009), so nothing extra
-// is threaded through the form. An unknown id is a 404; too-old is a 403.
-func (s *Server) editFormIncome(w http.ResponseWriter, r *http.Request, id int64) {
-	i, err := s.store.GetIncome(r.Context(), id)
-	if respondStoreErr(w, r, "loading income for edit", id, err) {
-		return
-	}
-	if !expense.Editable(i.Date, s.now()) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	s.renderIncomeEditForm(w, r, http.StatusOK, i.EntryLine(), id)
-}
-
-// handleEditSave re-parses the edited line, re-validates the save gate on the
-// server (so an entry that skipped the client is still refused), and updates the
-// record in place, switching store method by the {kind} path value. On success
-// it redirects home (Post/Redirect/Get); on a save-gate violation it re-renders
-// the form in edit mode at 422, changing nothing; an unknown id (or kind) is a
-// 404, and a record too old to edit (ADR-0008) a 403.
+// handleEditSave submits the edited line under the record's edit Intent —
+// re-validating the save gate on the server, kind rules included, so an edit
+// can't turn an expense into an income or back (ADR-0009 amendment) — and
+// updates the record in place, keeping its identity (and a payback's parent
+// link) and refreshing updated_at. It guards on the stored date, never the
+// submitted line, so a record too old to edit is refused (403) even on a direct
+// POST. On success it redirects home; on a save-gate violation it re-renders the
+// form under the same edit Intent at 422, changing nothing; an unknown id or
+// kind is a 404.
 func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 	kind, ok := parseKind(w, r)
 	if !ok {
@@ -479,76 +487,25 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if kind == kindIncome {
-		s.editSaveIncome(w, r, id)
-		return
-	}
-	s.editSaveExpense(w, r, id)
-}
-
-// editSaveExpense updates an expense from the edited line, keeping its identity
-// (id, created_at) and refreshing updated_at (ADR-0001). It guards on the stored
-// date, never the submitted line, so an expense too old to edit is refused even
-// on a direct POST that skipped the list's Edit link.
-func (s *Server) editSaveExpense(w http.ResponseWriter, r *http.Request, id int64) {
-	existing, err := s.store.Get(r.Context(), id)
-	if respondStoreErr(w, r, "loading expense for edit", id, err) {
-		return
-	}
-	if !expense.Editable(existing.Date, s.now()) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	in, _, err := s.editIntent(r.Context(), kind, id)
+	if respondEditErr(w, r, id, err) {
 		return
 	}
 
 	raw := r.PostFormValue("raw")
-
-	parsed := expense.Parse(raw, s.now())
-	if !parsed.OK() {
-		s.renderForm(w, r, http.StatusUnprocessableEntity, raw, editAction(kindExpense, id), true)
+	sub := expense.Submit(in, raw, s.now())
+	if !sub.OK() {
+		s.renderHome(w, r, http.StatusUnprocessableEntity, homeView{Raw: raw, Intent: in})
 		return
 	}
-
-	e := newExpense(parsed, raw)
-	e.ID = id
-	if respondStoreErr(w, r, "updating expense", id, s.store.Update(r.Context(), e)) {
+	if sub.Income != nil {
+		err = s.store.UpdateIncome(r.Context(), sub.Income)
+	} else {
+		err = s.store.Update(r.Context(), sub.Expense)
+	}
+	if respondStoreErr(w, r, "updating "+kind, id, err) {
 		return
 	}
-
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-// editSaveIncome is editSaveExpense's income twin. It builds the income from the
-// parsed line with a nil link and lets the store preserve the stored
-// linked_expense_id: an edit never re-parents a payback (ADR-0009), so fixing an
-// amount or account can't detach it from its ticket. The kind is fixed by the
-// route, so the record stays an income regardless of what the edited line parses
-// to.
-func (s *Server) editSaveIncome(w http.ResponseWriter, r *http.Request, id int64) {
-	existing, err := s.store.GetIncome(r.Context(), id)
-	if respondStoreErr(w, r, "loading income for edit", id, err) {
-		return
-	}
-	if !expense.Editable(existing.Date, s.now()) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
-	raw := r.PostFormValue("raw")
-
-	parsed := expense.Parse(raw, s.now())
-	if !parsed.OK() {
-		s.renderIncomeEditForm(w, r, http.StatusUnprocessableEntity, raw, id)
-		return
-	}
-
-	i := newIncome(parsed, raw)
-	i.ID = id
-	// LinkedExpenseID stays nil here on purpose: UpdateIncome does not write that
-	// column, so the stored parent link survives the edit (ADR-0009).
-	if respondStoreErr(w, r, "updating income", id, s.store.UpdateIncome(r.Context(), i)) {
-		return
-	}
-
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -576,10 +533,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePaybackStart primes the quick-add box to log a payback against an
-// existing expense: income mode (the '+' sigil pre-filled), a non-editable chip
-// naming the parent, and a hidden linked_expense_id so the saved income links to
-// it out-of-band — the link is never expressible in the entry text (ADR-0009).
-// It loads the parent to name it in the chip and to 404 an unknown id; the
+// existing expense under the AddPayback Intent: income mode (the '+' sigil
+// pre-filled), a non-editable chip naming the parent, and a hidden
+// linked_expense_id so the saved income links to it out-of-band — the link is
+// never expressible in the entry text (ADR-0009). An unknown id is a 404; the
 // primed box still posts to /add, where the hidden link is read back.
 func (s *Server) handlePaybackStart(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
@@ -590,15 +547,9 @@ func (s *Server) handlePaybackStart(w http.ResponseWriter, r *http.Request) {
 	if respondStoreErr(w, r, "loading expense for payback", id, err) {
 		return
 	}
-	s.renderHome(w, r, http.StatusOK, homeView{
-		// Prime the '+' income sigil so the box opens in income mode and the user
-		// types only the amount and who paid it back.
-		Raw:               incomePrefix,
-		FormAction:        addAction,
-		Payback:           true,
-		LinkedExpenseID:   e.ID,
-		LinkedExpenseDesc: e.Description,
-	})
+	// Prime the '+' income sigil so the box opens in income mode and the user
+	// types only the amount and who paid it back.
+	s.renderHome(w, r, http.StatusOK, homeView{Raw: incomePrefix, Intent: expense.AddPayback(e)})
 }
 
 // incomePrefix is the leading '+' sigil that marks an entry as an income
@@ -647,29 +598,11 @@ func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// newExpense turns a validated parse result into the record to store. The full
-// paid Amount is stored regardless of Split (ADR-0001); a blank account is left
-// nil so the store writes SQL NULL, and the verbatim line is retained as
-// RawText. The store fills in the identity and timestamps.
-func newExpense(p expense.ParsedEntry, raw string) *expense.Expense {
-	return expense.NewExpense(p.Date, p.Amount, p.Description, accountPtr(p.Account), p.Split, raw)
-}
-
-// newIncome turns a validated income parse result into the record to store,
-// with a nil link — the caller sets LinkedExpenseID from the hidden field when
-// the income is a payback (ADR-0009), never from the entry line. A blank account
-// is left nil so the store writes SQL NULL, and the verbatim line is retained as
-// RawText.
-func newIncome(p expense.ParsedEntry, raw string) *expense.Income {
-	return expense.NewIncome(p.Date, p.Amount, p.Description, accountPtr(p.Account), nil, raw)
-}
-
-// linkedExpenseID reads the hidden linked_expense_id form field into the pointer
-// the store binds: nil when the field is absent, blank, or malformed (a
-// standalone income), else the parsed parent id (a payback). The field is set
-// out-of-band by the "+ payback" flow and never appears in the entry text
-// (ADR-0009); a bad value degrades to a standalone income rather than a 500, and
-// a non-existent id would be caught by the foreign-key constraint on insert.
+// linkedExpenseID reads the hidden linked_expense_id form field: nil when the
+// field is absent, blank, or malformed (a standalone income), else the parsed
+// parent id (a payback, see addIntent). The field is set out-of-band by the
+// "+ payback" flow and never appears in the entry text (ADR-0009); a bad value
+// degrades to a standalone income rather than a 500.
 func linkedExpenseID(r *http.Request) *int64 {
 	v := strings.TrimSpace(r.PostFormValue("linked_expense_id"))
 	if v == "" {
@@ -680,17 +613,6 @@ func linkedExpenseID(r *http.Request) *int64 {
 		return nil
 	}
 	return &id
-}
-
-// accountPtr turns the parser's bare account string into the nullable pointer
-// the store binds: nil for a blank account (written as SQL NULL), else its
-// address. Shared by newExpense and newIncome so the NULL-vs-empty rule can't
-// drift between the two.
-func accountPtr(account string) *string {
-	if account == "" {
-		return nil
-	}
-	return &account
 }
 
 // render executes the home template at the given status.
@@ -721,24 +643,29 @@ func (s *Server) renderTemplate(w http.ResponseWriter, status int, name string, 
 
 // saveGateMessages is the user-facing wording for each save-gate violation,
 // kept here in the presentation layer (the parser holds only terse messages).
+// ErrMustBeIncome is worded per Intent in errorMessages.
 var saveGateMessages = map[expense.ParseError]string{
 	expense.ErrNoAmount:         "needs an amount",
 	expense.ErrEmptyDescription: "needs a description",
 	expense.ErrTwoDateTokens:    "two dates",
 	expense.ErrTwoAccounts:      "two @accounts",
 	expense.ErrSplitOnIncome:    "cannot split an income",
-	expense.ErrPaybackNotIncome: "a payback must keep its + amount",
+	expense.ErrMustBeIncome:     "an income must keep its + amount — delete it and add the expense instead",
+	expense.ErrMustBeExpense:    "an expense can't start with + — delete it and add the income instead",
 }
 
-// errorMessages maps the parser's save-gate violations to the user-facing
-// wording surfaced in the form, falling back to the terse message for any
-// unrecognised code.
-func errorMessages(errs []expense.ParseError) []string {
+// errorMessages maps the save-gate violations of a line submitted under in to
+// the user-facing wording surfaced in the form, naming a payback as such, and
+// falling back to the terse message for any unrecognised code.
+func errorMessages(errs []expense.ParseError, in expense.Intent) []string {
 	msgs := make([]string, 0, len(errs))
 	for _, e := range errs {
-		if m, ok := saveGateMessages[e]; ok {
+		switch m, ok := saveGateMessages[e]; {
+		case e == expense.ErrMustBeIncome && in.IsPayback():
+			msgs = append(msgs, "a payback must keep its + amount")
+		case ok:
 			msgs = append(msgs, m)
-		} else {
+		default:
 			msgs = append(msgs, e.Error())
 		}
 	}
