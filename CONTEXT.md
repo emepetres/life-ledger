@@ -25,12 +25,16 @@ The User who paid a shared expense (`paid_by`): whoever registered it, correctab
 _Avoid_: Owner, author
 
 **Shared balance** (derived):
-Who owes whom, and how much, shown at the top of the Shared tab ("Javi owes Carla €23.40", or "All square"), with a one-tap "Settle up" for whoever owes. Never stored: for each shared expense, the Payer is owed half its **Net cost** by the other User; **Settlements** then move it back. Paybacks on a shared expense are assumed received by its Payer.
+Who owes whom, and how much, shown at the top of the Shared tab ("Javi owes Carla €23.40", or "All square"), with a one-tap "Settle up" for whoever owes. Never stored: for each shared expense, the Payer is owed half its **Net cost** by the other User; **Settlements** and **Forgiveness** records then move it back. Paybacks on a shared expense are assumed received by its Payer.
 _Avoid_: Debt, total owed
 
 **Settlement**:
 A transfer of money between the two Users to settle the Shared balance, entered in the Shared tab with a leading `=` (`=40 devolución`), paid by whoever types it. Not a Shared expense and not halved: it only moves the balance. Javi → Carla is stored as an expense, Carla → Javi as an income, and both count in Javi's real totals but are listed only in the Shared tab.
 _Avoid_: Repayment, payback (that is linked to an Expense)
+
+**Forgiveness**:
+Javi giving up what Carla owes him, without money moving: the **Shared balance** drops by the forgiven amount, to zero when he forgives all of it (the default). Only Javi can forgive, and only while Carla owes him; the amount is never more than the balance at that moment. It carries the forgiven amount and a date (today unless Javi picks another). It is not an Expense or Income and does not count in Javi's totals: the forgiven money is already in them, since Javi paid the full Amount of the Shared expenses. Listed only in the Shared tab, visible to both Users, and removable but never editable.
+_Avoid_: Write-off, debt cancellation, waiver, settlement (that moves real money)
 
 **Account** (tag):
 An optional free-text tag naming which account or card an expense was paid from (e.g. personal, work, common, home). Blank when omitted, in which case "personal" is assumed at display time; may be filled in later when the expense is reviewed. A pure label in this slice — it carries no split or halving behavior.

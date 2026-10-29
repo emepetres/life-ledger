@@ -170,6 +170,12 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
   display: inline-flex; align-items: center;
 }
 .settle:hover { background: #92400e; }
+/* Forgive (ADR-0016): a disclosure beside Settle up holding amount + date. */
+.forgive summary { cursor: pointer; list-style: none; }
+.forgive summary::-webkit-details-marker { display: none; }
+.forgive form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 10px; }
+.forgive label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.forgive input { min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); font: inherit; }
 
 /* ---- day-grouped list ---- */
 .daygroup { margin-top: 18px; }
@@ -199,7 +205,8 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
    payback or an over-repaid net, which stay credit green (ADR-0009 amendment,
    #59/#63). */
 .row.income .amt { color: var(--income); }
-.row.settlement .amt { color: var(--muted); }
+.row.settlement .amt,
+.row.forgiveness .amt { color: var(--muted); }
 .desc-cell { min-width: 0; }
 .desc-cell .d { font-weight: 500; overflow-wrap: anywhere; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; align-items: center; }

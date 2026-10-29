@@ -148,13 +148,41 @@ func TestSharedBalance(t *testing.T) {
 	standalone := expense.NewIncome(sharedToday, 99999, "nómina", nil, nil, "")
 
 	tests := []struct {
-		name       string
-		expenses   []expense.Expense
-		incomes    []expense.Income
-		wantDebtor expense.Payer
-		wantAmount int
+		name          string
+		expenses      []expense.Expense
+		incomes       []expense.Income
+		forgivenesses []expense.Forgiveness
+		wantDebtor    expense.Payer
+		wantAmount    int
 	}{
 		{name: "nothing: even", wantAmount: 0},
+		{
+			name:          "forgiving all of what carla owes: javi paid 100, forgave 50 => even",
+			expenses:      []expense.Expense{sharedExp(1, 10000, expense.Javi)},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 5000)},
+		},
+		{
+			name:          "forgiving the whole displayed balance of an odd cent leaves it even: javi paid 0.01 => carla owes 0.01, forgave 0.01",
+			expenses:      []expense.Expense{sharedExp(1, 1, expense.Javi)},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 1)},
+		},
+		{
+			name:          "forgiving the whole displayed balance of 1.01 leaves it even: carla owes 0.51, forgave 0.51",
+			expenses:      []expense.Expense{sharedExp(1, 101, expense.Javi)},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 51)},
+		},
+		{
+			name:          "partial forgiveness: javi paid 100, forgave 20 => carla owes 30",
+			expenses:      []expense.Expense{sharedExp(1, 10000, expense.Javi)},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 2000)},
+			wantDebtor:    expense.Carla, wantAmount: 3000,
+		},
+		{
+			name:          "forgiveness on top of a carla settlement: javi paid 100, carla settled 5, forgave 45 => even",
+			expenses:      []expense.Expense{sharedExp(1, 10000, expense.Javi)},
+			incomes:       []expense.Income{*settleCarla},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 4500)},
+		},
 		{
 			name:       "javi paid 100: carla owes 50",
 			expenses:   []expense.Expense{sharedExp(1, 10000, expense.Javi)},
@@ -205,7 +233,7 @@ func TestSharedBalance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := expense.SharedBalance(tt.expenses, tt.incomes)
+			got := expense.SharedBalance(tt.expenses, tt.incomes, tt.forgivenesses)
 			if got.Amount != tt.wantAmount || (tt.wantAmount != 0 && got.Debtor != tt.wantDebtor) {
 				t.Errorf("SharedBalance = {debtor %q, amount %d}, want {debtor %q, amount %d}",
 					got.Debtor, got.Amount, tt.wantDebtor, tt.wantAmount)

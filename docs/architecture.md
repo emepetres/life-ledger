@@ -39,7 +39,7 @@ internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
                      Income linked to an Expense. An Expense also carries who
                      paid it (`PaidBy`) and whether it is a Settlement; the
                      Shared balance (`SharedBalance`) is derived from them
-                     (ADR-0015). The entry gate:
+                     and from the Forgiveness records (ADR-0015, ADR-0016). The entry gate:
                      Submit(Intent, raw, today) parses the line and applies the
                      Intent's kind rules (add, add payback, edit expense, edit
                      income — an edit keeps the record's kind; the edit window
@@ -52,7 +52,7 @@ internal/store/      Persistence. A repository over one SQLite file via the
                      pure-Go modernc.org/sqlite driver; owns the self-creating
                      startup path and embedded goose migrations, and sets the
                      WAL / foreign_keys / synchronous=FULL / busy_timeout
-                     pragmas. Two tables: `expense` and `income`
+                     pragmas. Three tables: `expense`, `income` and `forgiveness`
                      (income.linked_expense_id -> expense.id ON DELETE CASCADE);
                      a thin per-table repository (List / ListIncomes +
                      per-record CRUD) — netting and interleaving are the
@@ -71,8 +71,9 @@ internal/server/     HTTP surface. Routes and handlers for the home page,
                      whatever record expense.Submit returns, so preview and
                      save can't disagree; the pre-linked
                      payback start (/payback/{expenseID}), the two tabs (`/`
-                     ordinary, `/shared` shared + settlements + balance; Carla
-                     is confined to the latter), login/logout, and the
+                     ordinary, `/shared` shared + settlements + forgivenesses + balance;
+                     Carla is confined to the latter), `POST /forgive` (Javi only,
+                     ADR-0016), login/logout, and the
                      unauthenticated health check. view.go assembles the net-first,
                      day-grouped feed (net cost derived at render time; stored
                      amount stays full) into one discriminated rowView; renders
@@ -104,7 +105,7 @@ flowchart TD
 
 `internal/expense` is the leaf domain package — everything depends inward on it,
 and it depends on nothing. The `server` package defines its own narrow `Store`
-interface (the expense CRUD + list plus the income CRUD + `ListIncomes`), so the
+interface (the expense CRUD + list, the income CRUD + `ListIncomes`, and create/list/delete of Forgivenesses), so the
 HTTP layer depends on behaviour, not on the concrete SQLite store — which is what
 lets the handlers be tested as a black box against a real temp-file store.
 
@@ -247,5 +248,7 @@ flowchart LR
 - [ADR-0012](adr/0012-storage-durability-on-the-box.md) — storage durability on the box: no in-app backup
 - [ADR-0013](adr/0013-public-ingress-cloudflare-tunnel.md) — public ingress via Cloudflare Tunnel at `ledger.carnero.net`
 - [ADR-0014](adr/0014-nightly-offsite-snapshot-to-google-drive.md) — nightly offsite snapshot to Google Drive *(supersedes ADR-0007)*
+- [ADR-0015](adr/0015-shared-tab-and-two-users.md) — Shared tab, payer and two users
+- [ADR-0016](adr/0016-forgiveness-of-shared-balance.md) — Forgiveness of the Shared balance: Javi gives up what Carla owes, in its own table
 
 Operational runbooks live in [docs/deployment/](deployment/): the [mini-PC runbook](deployment/mini-pc/README.md) and the [restore runbook](deployment/restore-runbook.md).

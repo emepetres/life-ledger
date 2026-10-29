@@ -46,7 +46,7 @@ func TestGroupByDayInterleavesIncomeWithoutMovingTotal(t *testing.T) {
 		mkIncome(1, day, t2, 4000, "refund", nil),
 	}
 
-	groups := groupByDay(expenses, incomes, now)
+	groups := groupByDay(expenses, incomes, nil, now)
 	if len(groups) != 1 {
 		t.Fatalf("groups = %d, want 1 (all same day)", len(groups))
 	}
@@ -98,7 +98,7 @@ func TestGroupByDayAttachesPaybackAndNetsTotal(t *testing.T) {
 		mkIncome(2, day, day.Add(3*time.Hour), 500, "standalone", nil),
 	}
 
-	groups := groupByDay(expenses, incomes, now)
+	groups := groupByDay(expenses, incomes, nil, now)
 	if len(groups) != 1 {
 		t.Fatalf("groups = %d, want 1", len(groups))
 	}
@@ -159,7 +159,7 @@ func TestGroupByDayOverRepaidGoesNegativeGreen(t *testing.T) {
 		mkIncome(2, day, day.Add(3*time.Hour), 3000, "Alice", &parent),
 	}
 
-	groups := groupByDay(expenses, incomes, now)
+	groups := groupByDay(expenses, incomes, nil, now)
 	g := groups[0]
 	r := g.Rows[0]
 	if !r.HasPaybacks || r.PaybackCount != 2 {
@@ -184,7 +184,7 @@ func TestGroupByDayNoPaybacksLeavesRowPlain(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 
 	expenses := []expense.Expense{mkExpense(1, day, day.Add(time.Hour), 6000, "team lunch")}
-	groups := groupByDay(expenses, nil, now)
+	groups := groupByDay(expenses, nil, nil, now)
 	r := groups[0].Rows[0]
 	if r.HasPaybacks {
 		t.Errorf("expense with no paybacks should not set HasPaybacks; got %+v", r)

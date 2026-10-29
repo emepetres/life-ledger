@@ -54,6 +54,10 @@ type Store interface {
 	UpdateIncome(ctx context.Context, i *expense.Income) error
 	Delete(ctx context.Context, id int64) error
 	DeleteIncome(ctx context.Context, id int64) error
+	// Forgivenesses are created, listed and deleted, never edited (ADR-0016).
+	ListForgivenesses(ctx context.Context) ([]expense.Forgiveness, error)
+	CreateForgiveness(ctx context.Context, f *expense.Forgiveness) error
+	DeleteForgiveness(ctx context.Context, id int64) error
 }
 
 // Server holds the wired dependencies shared by all handlers.
@@ -154,6 +158,9 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// Start a payback: prime the quick-add box in income mode, pre-linked to this
 	// expense (the link is set out-of-band, never typed). A 404 for an unknown id.
 	mux.HandleFunc("GET /payback/{id}", s.handlePaybackStart)
+
+	// Forgive what Carla owes Javi on the Shared balance (ADR-0016).
+	mux.HandleFunc("POST /forgive", s.handleForgive)
 
 	// The Shared tab: the shared expenses and settlements, with who owes whom.
 	// It is the only page Carla sees.
@@ -328,6 +335,12 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	forgivenesses, err := s.store.ListForgivenesses(r.Context())
+	if err != nil {
+		log.Printf("listing forgivenesses: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	v.HTMXSrc = s.htmxSrc
 	v.FormAction = formAction(v.Intent)
 	if v.Intent.IsEdit() {
@@ -336,13 +349,20 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	v.Shared = v.Intent.IsShared()
 	v.TabPath = tabPath(v.Intent)
 	v.ShowTabs = !isCarla(r)
+	v.IsJavi = !isCarla(r)
+	v.Today = s.now().Format(forgiveDateLayout)
 	if v.Shared {
 		// The balance runs over every stored record, not just what the list shows.
-		v.Balance = buildBalance(expense.SharedBalance(expenses, incomes), userPayer(r))
+		v.Balance = buildBalance(expense.SharedBalance(expenses, incomes, forgivenesses), userPayer(r))
 	}
 	v.Preview = buildPreview(v.Raw, v.Intent, expense.Submit(v.Intent, v.Raw, s.now()), false)
 	tabExpenses, tabIncomes := tabRecords(expenses, incomes, v.Shared)
-	v.Groups = groupByDay(tabExpenses, tabIncomes, s.now())
+	// Forgivenesses live only in the Shared tab.
+	var tabForgivenesses []expense.Forgiveness
+	if v.Shared {
+		tabForgivenesses = forgivenesses
+	}
+	v.Groups = groupByDay(tabExpenses, tabIncomes, tabForgivenesses, s.now())
 	s.render(w, status, v)
 }
 
@@ -405,6 +425,11 @@ const (
 	kindExpense = "expense"
 	kindIncome  = "income"
 )
+
+// kindForgiveness is the {kind} the delete route also accepts, for a Forgiveness
+// (ADR-0016). It is deliberately not a kind parseKind accepts: a Forgiveness is
+// never edited, so the edit routes keep answering 404 for it.
+const kindForgiveness = "forgiveness"
 
 // editAction is the quick-add form's action when editing the given record: the
 // kind-qualified "/edit/{kind}/{id}" endpoint.
@@ -621,6 +646,10 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 // cascade-deletes its paybacks at the schema level (ADR-0009). An unknown id (or
 // kind) is a 404.
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("kind") == kindForgiveness {
+		s.handleDeleteForgiveness(w, r)
+		return
+	}
 	kind, ok := parseKind(w, r)
 	if !ok {
 		return

@@ -10,16 +10,18 @@ type Balance struct {
 	Amount int
 }
 
-// SharedBalance derives the Shared balance from every stored expense and income —
-// it never reads anything else and stores nothing. Each Shared expense costs both
-// Users half of its Net cost (the full Amount less its linked paybacks, which are
-// assumed received by the Payer), so the other User owes the Payer that half;
-// Settlements then move the balance back: Javi's (an expense) reduces what Javi
-// owes Carla, Carla's (an income) reduces what Carla owes Javi.
+// SharedBalance derives the Shared balance from every stored expense, income and
+// Forgiveness — it never reads anything else and stores nothing. Each Shared
+// expense costs both Users half of its Net cost (the full Amount less its linked
+// paybacks, which are assumed received by the Payer), so the other User owes the
+// Payer that half; Settlements then move the balance back: Javi's (an expense)
+// reduces what Javi owes Carla, Carla's (an income) reduces what Carla owes Javi.
+// A Forgiveness is Javi giving up what Carla owes him, so it lowers that balance
+// as shown, without any money having moved.
 //
 // The arithmetic runs in doubled units so an odd cent never truncates; the
 // result is rounded to the nearest cent, half away from zero.
-func SharedBalance(expenses []Expense, incomes []Income) Balance {
+func SharedBalance(expenses []Expense, incomes []Income, forgivenesses []Forgiveness) Balance {
 	paybacks := make(map[int64]int)
 	for _, i := range incomes {
 		if i.LinkedExpenseID != nil {
@@ -48,11 +50,22 @@ func SharedBalance(expenses []Expense, incomes []Income) Balance {
 		}
 	}
 
-	debtor, magnitude := Javi, owedByJavi2
+	// The balance as shown, in whole cents: Javi owes Carla this much (negative:
+	// Carla owes Javi). A Forgiveness forgives part of the balance as shown, so it
+	// comes off this rounded figure, never off the doubled one: forgiving the whole
+	// displayed balance must always leave it at zero, even on an odd cent.
+	owedByJavi := (owedByJavi2 + 1) / 2
 	if owedByJavi2 < 0 {
-		debtor, magnitude = Carla, -owedByJavi2
+		owedByJavi = -((-owedByJavi2 + 1) / 2)
 	}
-	amount := (magnitude + 1) / 2
+	for _, f := range forgivenesses {
+		owedByJavi += f.Amount
+	}
+
+	debtor, amount := Javi, owedByJavi
+	if owedByJavi < 0 {
+		debtor, amount = Carla, -owedByJavi
+	}
 	if amount == 0 {
 		return Balance{}
 	}

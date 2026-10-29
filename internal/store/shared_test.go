@@ -2,9 +2,12 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/emepetres/life-ledger/internal/expense"
+	"github.com/emepetres/life-ledger/internal/store"
 )
 
 // A Shared expense keeps who paid it across Create/Get/List/Update.
@@ -70,5 +73,44 @@ func TestSettlementRoundTrips(t *testing.T) {
 	incomes, _ := s.ListIncomes(ctx)
 	if len(incomes) != 1 || !incomes[0].Settlement {
 		t.Errorf("ListIncomes: %+v", incomes)
+	}
+}
+
+// A Forgiveness keeps its date and amount, lists newest first, and deletes.
+func TestForgivenessRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+
+	day := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) // a date carries only the calendar day
+	older := expense.NewForgiveness(day.AddDate(0, 0, -3), 1200)
+	newer := expense.NewForgiveness(day, 2340)
+	for _, f := range []*expense.Forgiveness{older, newer} {
+		if err := s.CreateForgiveness(ctx, f); err != nil {
+			t.Fatalf("CreateForgiveness: %v", err)
+		}
+		if f.ID == 0 || f.CreatedAt.IsZero() {
+			t.Errorf("CreateForgiveness left identity unset: %+v", f)
+		}
+	}
+
+	got, err := s.ListForgivenesses(ctx)
+	if err != nil {
+		t.Fatalf("ListForgivenesses: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != newer.ID || got[1].ID != older.ID {
+		t.Fatalf("list = %+v, want newest first [%d %d]", got, newer.ID, older.ID)
+	}
+	if got[0].Amount != 2340 || !got[0].Date.Equal(day) {
+		t.Errorf("newest = %+v, want amount 2340 on %v", got[0], day)
+	}
+
+	if err := s.DeleteForgiveness(ctx, older.ID); err != nil {
+		t.Fatalf("DeleteForgiveness: %v", err)
+	}
+	if err := s.DeleteForgiveness(ctx, older.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("second delete err = %v, want ErrNotFound", err)
+	}
+	if left, _ := s.ListForgivenesses(ctx); len(left) != 1 || left[0].ID != newer.ID {
+		t.Errorf("after delete = %+v, want only the newer one", left)
 	}
 }
