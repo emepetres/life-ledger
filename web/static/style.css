@@ -1,15 +1,20 @@
 /*
-  Life Ledger — one responsive surface (locked prototype Variant D).
-  Desktop (>=640px): quick-add in a sticky lateral rail beside a columned list
-  table. Mobile (<640px): the rail collapses above the list and every table row
-  restacks — amount + description prominent, a compact meta line (account + half)
-  beneath, actions inline. No literal cards: the same table restacks.
+  Life Ledger — one responsive surface.
+  Desktop (>=640px): quick-add in a sticky lateral rail beside the list.
+  Mobile (<640px): the rail sits above the list (not sticky — a pinned form
+  would cover half the screen) and the header's tabs become a full-width
+  switch.
+
+  Every row has the same anatomy at every width: amount, description, a meta
+  line of chips under the description, then actions. Desktop reads it as
+  [amount | description + chips | actions]; mobile as two lines,
+  [description | amount] over [chips | actions]. No literal cards.
 */
 :root {
   --bg: #f4f5f7;
   --panel: #ffffff;
   --ink: #1c2024;
-  --muted: #6b7280;
+  --muted: #5b6472;
   --line: #e5e7eb;
   --accent: #2f6f4f;
   --accent-soft: #e6f2ec;
@@ -26,11 +31,10 @@
   --radius: 12px;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
   --sans: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
-  /* Shared by .row and .pb (a payback line), so a payback's amount/account
-     land in the same columns as its parent row — one definition, so the two
-     can't drift apart. */
-  --row-grid: 110px 1fr max-content 40px max-content;
-  --row-grid-narrow: auto 1fr auto;
+  /* Shared by .row and .pb (a payback line) so a payback's amount lands in the
+     same column as its parent's — one definition, so they can't drift. */
+  --row-grid: 104px 1fr auto;
+  --btn: 32px; /* icon button edge; 40px on touch, see below */
 }
 
 * { box-sizing: border-box; }
@@ -41,31 +45,41 @@ body {
   color: var(--ink);
   font-family: var(--sans);
   font-size: 15px;
+  line-height: 1.4;
 }
 
-input, button { font-family: inherit; font-size: inherit; }
+/* 16px minimum: anything smaller makes iOS zoom the page when the box is focused. */
+input, button { font-family: inherit; font-size: 16px; }
 
 h1 { font-size: 18px; margin: 0; }
 
-.app-header { display: flex; align-items: center; gap: 10px; padding: 14px 20px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- header ---- */
+.app-header {
+  display: flex; align-items: center; gap: 10px; padding: 14px 20px;
+  max-width: 1000px; margin: 0 auto;
+}
 .app-header .logo {
-  width: 26px; height: 26px; border-radius: 7px;
+  width: 28px; height: 28px; border-radius: 8px;
   background: var(--accent); color: #fff;
   display: grid; place-items: center; font-weight: 700;
 }
 .app-header .sub { color: var(--muted); font-size: 13px; }
 .app-header .logout { margin-left: auto; }
-/* Tab navigation (Gastos / Compartidos): Javi only — Carla has just the one tab. */
+.app-header .logout .ghost { min-height: 36px; font-size: 14px; }
+/* Tab navigation (Expenses / Shared): Javi only — Carla has just the one view. */
 .app-header .tabs { display: flex; gap: 4px; margin-left: 24px; }
 .app-header .tabs a {
-  padding: 6px 14px; border-radius: 999px; text-decoration: none;
-  color: var(--muted); font-size: 14px; font-weight: 600;
+  padding: 8px 16px; border-radius: 999px; text-decoration: none;
+  color: var(--muted); font-size: 15px; font-weight: 600;
 }
+.app-header .tabs a:hover { color: var(--ink); background: #e9ebee; }
 .app-header .tabs a.active { background: var(--accent-soft); color: var(--amount); }
 
 .wrap { max-width: 1000px; margin: 0 auto; padding: 0 20px 40px; }
 
-.shell { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
+.shell { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
 
 /* ---- quick-add rail ---- */
 .entry {
@@ -74,45 +88,41 @@ h1 { font-size: 18px; margin: 0; }
   position: sticky; top: 14px; z-index: 5;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .05);
 }
-.entry h2 { margin: 0 0 10px; font-size: 14px; }
-/* Edit mode: highlight the quick-add rail so it's clear the box is editing an
-   existing expense in place rather than adding a new one. */
+.entry h2 { margin: 0 0 10px; font-size: 15px; }
+/* Edit mode: highlight the rail so it's clear the box is changing an existing
+   record in place rather than adding a new one. */
 .entry.editing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 /* Login: a single centred panel rather than the sticky quick-add rail. */
 .entry.login { max-width: 360px; margin: 40px auto 0; position: static; }
 .qa-input {
   width: 100%; padding: 13px 14px;
-  border: 1.5px solid var(--line); border-radius: 10px;
-  font-family: var(--mono); font-size: 15px; outline: none;
+  border: 1.5px solid #cdd2d9; border-radius: 10px;
+  font-family: var(--mono); outline: none; background: #fff;
 }
 .qa-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .btnrow { display: flex; gap: 8px; margin-top: 10px; }
 button.primary {
   flex: 1; background: var(--accent); color: #fff; border: none;
-  padding: 10px 16px; border-radius: 10px; font-weight: 600; cursor: pointer;
+  min-height: 44px; padding: 10px 16px; border-radius: 10px; font-weight: 600; cursor: pointer;
 }
 button.primary:hover { background: #275e43; }
+button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
+.btnrow .cancel { min-height: 44px; padding: 0 16px; border-radius: 10px; }
 .ghost {
   background: transparent; border: 1px solid var(--line); border-radius: 8px;
   padding: 5px 10px; cursor: pointer; color: var(--muted);
   font: inherit; text-decoration: none; display: inline-flex; align-items: center;
 }
-.ghost:hover { color: var(--ink); border-color: #cbd0d6; }
+.ghost:hover { color: var(--ink); border-color: #cbd0d6; background: #fff; }
 .ghost.danger:hover { color: var(--danger); border-color: #f0c6c6; }
-.hint { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 12px; }
-.gate-bad { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
-.gate-ok { color: var(--accent); font-size: 12.5px; margin-top: 8px; }
-.export {
-  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
-  font-size: 12.5px; color: var(--muted);
-}
-.export input[type="date"] { font: inherit; margin-left: 4px; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 12px 0 0; }
+.hint b { font-family: var(--mono); font-weight: 600; color: var(--ink); font-size: 12.5px; }
+.gate-bad { color: var(--danger); font-size: 13.5px; margin-top: 8px; }
+.gate-ok { color: var(--accent); font-size: 13.5px; margin-top: 8px; }
 .notice {
-  margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
-  background: var(--split-soft); color: var(--split); font-size: 13px;
+  margin: 0 0 12px; padding: 10px 14px; border-radius: 8px;
+  background: var(--split-soft); color: var(--split); font-size: 14px;
 }
-button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 
 /* ---- live preview ---- */
 .preview.chips {
@@ -128,46 +138,62 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
    #59/#63). */
 .chip.amount.income { background: var(--income-soft); color: var(--income); }
 .chip.date { background: #eef2f7; color: #334155; }
-.chip.desc { background: transparent; color: var(--ink); padding-left: 0; font-weight: 600; }
-.chip.muted { background: none; color: var(--muted); }
+.chip.desc { background: transparent; color: var(--ink); padding-left: 0; font-weight: 600; white-space: normal; }
+.chip.muted { background: none; color: var(--muted); padding-left: 0; white-space: normal; }
 
-/* ---- chips / badges ---- */
-.chip { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+/* ---- chips ---- */
+.chip { font-size: 13px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
 .chip.acct { background: var(--acct-soft); color: var(--acct); }
-.chip.acct.default { background: #f1f2f4; color: var(--muted); font-style: italic; }
-.badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
-.badge.split { background: var(--split-soft); color: var(--split); }
-.chip.split { background: var(--split-soft); color: var(--split); font-weight: 600; }
+.chip.acct.default { background: #eceef1; color: var(--muted); font-style: italic; }
 /* Who paid a shared expense, and the direction of a settlement. */
 .chip.paidby { background: var(--split-soft); color: var(--split); font-weight: 600; }
-/* The Shared tab's headline: who owes whom. */
+.chip.link { background: var(--split-soft); color: var(--split); font-weight: 600; white-space: normal; }
+
+/* ---- Shared tab headline: who owes whom ---- */
 .balance {
-  margin: 0 0 14px; padding: 12px 16px; border-radius: 10px;
+  margin: 0 0 18px; padding: 14px 18px; border-radius: var(--radius);
   background: var(--split-soft); color: var(--split);
-  font-size: 17px; font-weight: 700;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px 20px; flex-wrap: wrap;
 }
 .balance.even { background: var(--credit-soft); color: var(--credit); }
+.b-main { display: flex; flex-direction: column; gap: 2px; }
+.b-who { font-size: 15px; font-weight: 600; }
+.b-amt {
+  font-family: var(--mono); font-size: 30px; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+.even .b-who { font-size: 20px; font-weight: 700; }
+.settle {
+  background: var(--split); color: #fff; text-decoration: none; font-weight: 600;
+  min-height: 44px; padding: 0 20px; border-radius: 10px;
+  display: inline-flex; align-items: center;
+}
+.settle:hover { background: #92400e; }
 
 /* ---- day-grouped list ---- */
-.daygroup { margin-top: 16px; }
+.daygroup { margin-top: 18px; }
 .daygroup:first-child { margin-top: 0; }
 .dayhead {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--muted); font-weight: 700; padding: 0 6px 5px;
-  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 2; background: var(--bg);
   display: flex; justify-content: space-between; align-items: baseline;
+  padding: 8px 6px 6px; border-bottom: 1px solid var(--line);
+  font-size: 14px; color: var(--muted);
 }
-.dayhead .tot { font-family: var(--mono); font-weight: 600; color: #94a1ad; }
+.dayhead .dh-label b { color: var(--ink); margin-right: 8px; }
+.dayhead .tot { font-family: var(--mono); font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
 .row {
   display: grid;
   grid-template-columns: var(--row-grid);
-  align-items: center; gap: 12px;
-  padding: 11px 6px; border-bottom: 1px solid #f2f3f5;
+  align-items: start; column-gap: 12px;
+  padding: 12px 6px; border-bottom: 1px solid #eceef1;
 }
 .row:hover { background: #fafbfc; }
 .row .amt {
   font-family: var(--mono); font-weight: 700; color: var(--amount);
   text-align: right; font-variant-numeric: tabular-nums;
+  padding-top: 1px;
 }
 /* A standalone income renders blue with no leading '−' — distinct from a
    payback or an over-repaid net, which stay credit green (ADR-0009 amendment,
@@ -175,26 +201,29 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .row.income .amt { color: var(--income); }
 .row.settlement .amt { color: var(--muted); }
 .desc-cell { min-width: 0; }
-.desc-cell .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.meta-m { display: none; gap: 6px; margin-top: 4px; align-items: center; } /* mobile-only */
-.cell-split { text-align: center; }
-.row .acts { display: flex; gap: 4px; justify-content: flex-end; opacity: 0; transition: opacity .1s; }
-.row:hover .acts { opacity: 1; }
+.desc-cell .d { font-weight: 500; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; align-items: center; }
+.meta:empty { display: none; }
+
+/* Actions: quietly visible on desktop (a hover-only control can't be found),
+   full strength on hover or keyboard focus. */
+.row .acts { display: flex; gap: 4px; justify-content: flex-end; opacity: .5; transition: opacity .1s; }
+.row:hover .acts, .row:focus-within .acts, .pb:hover .acts, .pb:focus-within .acts { opacity: 1; }
 /* The delete control is a form (for a no-JS POST); let its button sit directly
    in the .acts flex row beside the edit link. */
-.row .acts form { display: contents; }
+.row .acts form, .pb .acts form { display: contents; }
+.pb .acts { display: flex; gap: 4px; justify-content: flex-end; opacity: .5; }
 
-/* Row actions are icon-only (aria-label + title carry the accessible name); the
-   hover-reveal / always-visible-on-mobile behavior above is unchanged since it
-   still targets .acts as a whole. */
-.icon-btn { width: 30px; height: 30px; padding: 0; justify-content: center; }
-.icon-btn .icon { width: 16px; height: 16px; display: block; }
+/* Icon-only actions (aria-label + title carry the accessible name). */
+.icon-btn { width: var(--btn); height: var(--btn); padding: 0; justify-content: center; }
+.icon-btn .icon { width: 17px; height: 17px; display: block; }
 
-.empty { color: var(--muted); padding: 16px; text-align: center; }
+.empty { color: var(--muted); padding: 28px 16px; text-align: center; }
+.empty p { margin: 0 0 4px; }
+.empty p:first-child { color: var(--ink); font-weight: 600; }
+.empty b { font-family: var(--mono); font-weight: 600; color: var(--ink); }
 
 /* ---- payback / net cost (ADR-0009) ---- */
-/* The out-of-band payback link chip in the quick-add box. */
-.chip.link { background: var(--split-soft); color: var(--split); font-weight: 600; }
 .payback-banner {
   display: flex; align-items: center; gap: 8px;
   margin: 2px 0 10px; flex-wrap: wrap;
@@ -205,70 +234,79 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
    sits beneath it, struck through — storage stays the faithful transcript. */
 .amt.stack { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
 .amt.stack .netbig { font-weight: 700; }
-/* Over-repaid (Σ paybacks > paid): the negative net renders green, like a credit. */
 .amt.stack .netbig.credit { color: var(--credit); }
-.amt.stack .paid { font-size: 11.5px; font-weight: 500; color: var(--muted); text-decoration: line-through; }
+.amt.stack .paid { font-size: 12px; font-weight: 500; color: var(--muted); text-decoration: line-through; }
 
-/* The "−€X.XX from N paybacks" disclosure is a full-width region spanning the
-   row (a 6th item in .row's grid, wrapping to its own auto row via
-   grid-column: 1/-1) rather than nested in the description cell — so the
-   parent's own description/account/split stay uncluttered whether the drawer
-   is open or closed. Only phrasing content sits in the summary (valid
-   <details> nesting); the row's edit / delete / + payback actions stay in
-   .acts, outside the toggle. */
-.pb-disclosure { grid-column: 1 / -1; margin-top: 3px; }
+/* The "−€X.XX from N paybacks" disclosure spans the whole row (grid-column
+   1/-1) so the parent's own cells stay uncluttered open or closed. Only
+   phrasing content sits in the summary (valid <details> nesting). */
+.pb-disclosure { grid-column: 1 / -1; margin-top: 6px; }
 .pb-disclosure > summary {
-  list-style: none; cursor: pointer;
-  font-size: 12px; color: var(--muted);
+  list-style: none; cursor: pointer; font-size: 13px; color: var(--muted);
+  display: inline-block; padding: 4px 0;
 }
 .pb-disclosure > summary::-webkit-details-marker { display: none; }
 .pb-disclosure > summary::after { content: " ▾"; }
 .pb-disclosure[open] > summary::after { content: " ▴"; }
 .pbsum .in { color: var(--credit); font-weight: 600; }
 
-/* The expanded breakdown: each payback is its own grid row using the exact
-   same column template as .row (110px amount / 1fr description / max-content
-   account / 40px split-spacer / max-content actions), starting at the same
-   left edge as .row's own cells — so payback amounts and accounts land in the
-   same columns as the parent expense and standalone-income rows. A left accent
-   (painted via box-shadow, so it costs no layout space and can't shift the
-   columns) sets the block off as subordinate to its parent. */
+/* The expanded breakdown: each payback is a grid row on the same template as
+   .row, so its amount lands in the parent's amount column. A left accent
+   (box-shadow, no layout cost) marks it as subordinate. */
 .pb-drawer {
   padding-top: 4px; margin-top: 2px;
   border-top: 1px dashed var(--line);
   box-shadow: inset 3px 0 0 0 var(--line);
 }
 .pb {
-  display: grid;
-  grid-template-columns: var(--row-grid);
-  align-items: center; gap: 12px;
-  padding: 4px 6px; font-size: 13px; color: #334155;
+  display: grid; grid-template-columns: var(--row-grid);
+  align-items: start; column-gap: 12px;
+  padding: 6px 6px; font-size: 14px; color: #334155;
 }
 .pb .pa {
   font-family: var(--mono); color: var(--credit); font-weight: 700;
   text-align: right; font-variant-numeric: tabular-nums;
 }
-.pb-body { min-width: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.pb-body .pb-desc { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pb-body .pb-date { flex: none; color: var(--muted); }
-.pb-split { text-align: center; }
+.pb-body { min-width: 0; }
+.pb-line { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.pb-desc { overflow-wrap: anywhere; }
+.pb-date { color: var(--muted); font-size: 13px; }
 
-@media (max-width: 640px) {
-  /* On the narrow row grid (auto 1fr auto), the net headline aligns left like
-     the plain amount does. */
-  .amt.stack { align-items: flex-start; }
+/* Touch screens (any width): bigger targets, nothing hidden behind hover. */
+@media (pointer: coarse) {
+  :root { --btn: 40px; }
+  .row .acts, .pb .acts { opacity: 1; }
 }
 
-/* ---- narrow: rail collapses, rows restack (no literal cards) ---- */
+/* ---- narrow: rail goes above the list, rows go two-line ---- */
 @media (max-width: 640px) {
-  .shell { grid-template-columns: 1fr; }
-  .entry { top: 8px; }
-  .row, .pb { grid-template-columns: var(--row-grid-narrow); column-gap: 12px; }
-  .row { padding: 12px 4px; }
-  .pb { padding: 6px 4px; }
-  .row .amt { text-align: left; font-size: 16px; }
-  .cell-acct, .cell-split, .pb-acct, .pb-split { display: none; } /* folded into the meta line */
-  .meta-m { display: flex; }
-  .pb-body .meta-m { flex-basis: 100%; } /* account chip drops to its own line */
-  .row .acts { opacity: 1; } /* no hover on touch */
+  .app-header { flex-wrap: wrap; padding: 12px 16px 8px; row-gap: 10px; }
+  .app-header .sub { display: none; }
+  /* Tabs become the screen's primary switch: a full-width row, big targets. */
+  .app-header .tabs {
+    order: 3; flex-basis: 100%; margin: 0; padding: 4px;
+    background: #e9ebee; border-radius: 999px;
+  }
+  .app-header .tabs a { flex: 1; text-align: center; padding: 10px 0; }
+  .app-header .tabs a.active { background: var(--panel); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+
+  .wrap { padding: 0 16px 32px; }
+  .shell { grid-template-columns: 1fr; gap: 16px; }
+  .entry { position: static; }
+
+  .row, .pb {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "desc amt" "meta acts";
+    column-gap: 12px; row-gap: 2px; align-items: center;
+  }
+  .row { padding: 12px 2px; }
+  .pb { padding: 8px 2px; }
+  /* Lift the description and its chips into the row's own grid. */
+  .desc-cell, .pb-body { display: contents; }
+  .desc-cell .d, .pb-line { grid-area: desc; align-self: start; }
+  .row .amt, .pb .pa { grid-area: amt; align-self: start; font-size: 16px; }
+  .row .meta, .pb .meta { grid-area: meta; margin-top: 0; }
+  .row .acts, .pb .acts { grid-area: acts; }
+  .amt.stack { align-items: flex-end; }
+  .pb-disclosure { margin-top: 4px; }
 }

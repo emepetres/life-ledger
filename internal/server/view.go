@@ -63,8 +63,15 @@ type homeView struct {
 // balanceView is the Shared balance as shown: one sentence, and whether the two
 // users are even.
 type balanceView struct {
-	Text string
-	Even bool
+	// Text is the whole sentence ("Carla owes Javi €50.00"), also the status
+	// announcement; Who and Amount are its two halves, laid out apart.
+	Text   string
+	Who    string
+	Amount string
+	Even   bool
+	// SettleRaw prefills the entry box ("=50.00") for the user who owes, so
+	// settling up is one tap; empty for the creditor and when even.
+	SettleRaw string
 }
 
 // payerName is a Payer as shown to people.
@@ -75,17 +82,24 @@ func payerName(p expense.Payer) string {
 	return "Javi"
 }
 
-// buildBalance words the Shared balance: "Carla debe €50.00 a Javi", or that the
-// two are even.
-func buildBalance(b expense.Balance) balanceView {
+// buildBalance words the Shared balance: "Carla owes Javi €50.00", or that the
+// two are all square. viewer is who is looking: only the debtor is offered the
+// one-tap settle-up.
+func buildBalance(b expense.Balance, viewer expense.Payer) balanceView {
 	if b.Amount == 0 {
-		return balanceView{Text: "Estáis a mano", Even: true}
+		return balanceView{Text: "All square", Who: "All square", Even: true}
 	}
 	creditor := expense.Javi
 	if b.Debtor == expense.Javi {
 		creditor = expense.Carla
 	}
-	return balanceView{Text: fmt.Sprintf("%s debe %s a %s", payerName(b.Debtor), formatEuro(b.Amount), payerName(creditor))}
+	amount := formatEuro(b.Amount)
+	who := fmt.Sprintf("%s owes %s", payerName(b.Debtor), payerName(creditor))
+	v := balanceView{Text: who + " " + amount, Who: who, Amount: amount}
+	if viewer == b.Debtor {
+		v.SettleRaw = fmt.Sprintf("=%d.%02d", b.Amount/100, b.Amount%100)
+	}
+	return v
 }
 
 // previewView is the view model for the live-preview fragment: the resolved
@@ -192,6 +206,8 @@ func accountDisplay(account string) (label string, isDefault bool) {
 type dayGroup struct {
 	// Label is the day header, e.g. "Fri 17 Jul".
 	Label string
+	// Rel is "Today" or "Yesterday" for those days, else empty.
+	Rel string
 	// Total is the summed amount for the day, formatted "€X.XX".
 	Total string
 	// Rows are the day's expenses, most-recently-added first.
@@ -406,7 +422,7 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 	for _, it := range feed {
 		key := it.date.Format(dayKeyLayout)
 		if len(groups) == 0 || key != curKey {
-			groups = append(groups, dayGroup{Label: it.date.Format(dayLabelLayout)})
+			groups = append(groups, dayGroup{Label: it.date.Format(dayLabelLayout), Rel: relativeDay(it.date, now)})
 			curKey = key
 			curTotal = 0
 		}
@@ -524,4 +540,18 @@ func accountLabel(account *string) string {
 	}
 	label, _ := accountDisplay(tag)
 	return label
+}
+
+// relativeDay names today and yesterday so the list's newest headers read as
+// people say them; older days keep only their date.
+func relativeDay(d, now time.Time) string {
+	y, m, day := now.Date()
+	today := time.Date(y, m, day, 0, 0, 0, 0, d.Location())
+	switch {
+	case d.Format(dayKeyLayout) == today.Format(dayKeyLayout):
+		return "Today"
+	case d.Format(dayKeyLayout) == today.AddDate(0, 0, -1).Format(dayKeyLayout):
+		return "Yesterday"
+	}
+	return ""
 }

@@ -241,18 +241,37 @@ func TestSharedTabShowsBalance(t *testing.T) {
 	javi := as(t, ts, javiPassword)
 	carla := as(t, ts, carlaPassword)
 
-	if _, body := getAs(t, javi, ts, "/shared"); !strings.Contains(body, "Estáis a mano") {
+	if _, body := getAs(t, javi, ts, "/shared"); !strings.Contains(body, "All square") {
 		t.Errorf("empty ledger should be even; got:\n%s", body)
 	}
 
 	addShared(t, javi, ts, "100 alquiler")
-	if _, body := getAs(t, javi, ts, "/shared"); !strings.Contains(body, "Carla debe €50.00 a Javi") {
-		t.Errorf("Javi paid 100: want 'Carla debe €50.00 a Javi'; got:\n%s", body)
+	if _, body := getAs(t, javi, ts, "/shared"); !strings.Contains(body, "Carla owes Javi €50.00") {
+		t.Errorf("Javi paid 100: want 'Carla owes Javi €50.00'; got:\n%s", body)
 	}
 
 	addShared(t, carla, ts, "160 viaje")
-	if _, body := getAs(t, carla, ts, "/shared"); !strings.Contains(body, "Javi debe €30.00 a Carla") {
-		t.Errorf("Carla paid 160 on top: want 'Javi debe €30.00 a Carla'; got:\n%s", body)
+	if _, body := getAs(t, carla, ts, "/shared"); !strings.Contains(body, "Javi owes Carla €30.00") {
+		t.Errorf("Carla paid 160 on top: want 'Javi owes Carla €30.00'; got:\n%s", body)
+	}
+}
+
+// Only the user who owes is offered the one-tap settle-up, which prefills the
+// entry box with the exact amount.
+func TestSharedBalanceOffersSettleUpToDebtorOnly(t *testing.T) {
+	ts, _ := newTwoUserServer(t)
+	javi := as(t, ts, javiPassword)
+	carla := as(t, ts, carlaPassword)
+	addShared(t, javi, ts, "100.50 alquiler") // Carla owes Javi 50.25
+
+	if _, body := getAs(t, carla, ts, "/shared"); !strings.Contains(body, "/shared?raw=%3d50.25") && !strings.Contains(body, "/shared?raw=%3D50.25") {
+		t.Errorf("the debtor should get a settle-up link; got:\n%s", body)
+	}
+	if _, body := getAs(t, javi, ts, "/shared"); strings.Contains(body, "Settle up") {
+		t.Errorf("the creditor should not be offered settle-up; got:\n%s", body)
+	}
+	if _, body := getAs(t, carla, ts, "/shared?raw=%3D50.25"); !strings.Contains(body, `value="=50.25"`) {
+		t.Errorf("?raw= should prefill the box; got:\n%s", body)
 	}
 }
 
@@ -265,8 +284,8 @@ func TestSettlements(t *testing.T) {
 
 	addShared(t, carla, ts, "100 viaje") // Javi owes Carla 50
 	addShared(t, javi, ts, "=30 bizum")  // Javi pays Carla 30 -> owes 20
-	if _, body := getAs(t, javi, ts, "/shared"); !strings.Contains(body, "Javi debe €20.00 a Carla") {
-		t.Errorf("after Javi's settlement: want 'Javi debe €20.00 a Carla'; got:\n%s", body)
+	if _, body := getAs(t, javi, ts, "/shared"); !strings.Contains(body, "Javi owes Carla €20.00") {
+		t.Errorf("after Javi's settlement: want 'Javi owes Carla €20.00'; got:\n%s", body)
 	}
 
 	es := listExpenses(t, st)
@@ -281,8 +300,8 @@ func TestSettlements(t *testing.T) {
 	}
 
 	addShared(t, carla, ts, "=25 bizum") // Carla pays Javi 25 -> Javi owes 45
-	if _, body := getAs(t, carla, ts, "/shared"); !strings.Contains(body, "Javi debe €45.00 a Carla") {
-		t.Errorf("after Carla's settlement: want 'Javi debe €45.00 a Carla'; got:\n%s", body)
+	if _, body := getAs(t, carla, ts, "/shared"); !strings.Contains(body, "Javi owes Carla €45.00") {
+		t.Errorf("after Carla's settlement: want 'Javi owes Carla €45.00'; got:\n%s", body)
 	}
 	incomes, _ := st.ListIncomes(context.Background())
 	if len(incomes) != 1 || !incomes[0].Settlement {
@@ -331,7 +350,7 @@ func TestPaybackOnSharedExpense(t *testing.T) {
 	addShared(t, javi, ts, "100 cena")
 	e := listExpenses(t, st)[0]
 
-	if resp, body := getAs(t, carla, ts, "/payback/"+itoa(e.ID)); resp.StatusCode != http.StatusOK || !strings.Contains(body, "payback → cena") {
+	if resp, body := getAs(t, carla, ts, "/payback/"+itoa(e.ID)); resp.StatusCode != http.StatusOK || !strings.Contains(body, "Payback for cena") {
 		t.Fatalf("Carla payback form: %d", resp.StatusCode)
 	}
 	resp, _ := do(t, carla, http.MethodPost, ts, "/add", url.Values{"raw": {"+40 reembolso"}, "linked_expense_id": {itoa(e.ID)}})
@@ -341,7 +360,7 @@ func TestPaybackOnSharedExpense(t *testing.T) {
 
 	_, shared := getAs(t, javi, ts, "/shared")
 	// 100 paid by Javi, 40 back => net 60, Carla owes 30.
-	if !strings.Contains(shared, "Carla debe €30.00 a Javi") || !strings.Contains(shared, "reembolso") {
+	if !strings.Contains(shared, "Carla owes Javi €30.00") || !strings.Contains(shared, "reembolso") {
 		t.Errorf("shared tab after payback; got:\n%s", shared)
 	}
 	if _, home := getAs(t, javi, ts, "/"); strings.Contains(home, "reembolso") {

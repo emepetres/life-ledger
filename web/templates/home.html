@@ -65,15 +65,15 @@
     </svg>
 
     <header class="app-header">
-      <div class="logo">£</div>
+      <div class="logo" aria-hidden="true">€</div>
       <div>
         <h1>Life Ledger</h1>
         <div class="sub">Personal expense register</div>
       </div>
       {{ if .ShowTabs }}
-      <nav class="tabs" aria-label="Tabs">
-        <a href="/"{{ if not .Shared }} class="active" aria-current="page"{{ end }}>Gastos</a>
-        <a href="/shared"{{ if .Shared }} class="active" aria-current="page"{{ end }}>Compartidos</a>
+      <nav class="tabs" aria-label="Ledger views">
+        <a href="/"{{ if not .Shared }} class="active" aria-current="page"{{ end }}>Expenses</a>
+        <a href="/shared"{{ if .Shared }} class="active" aria-current="page"{{ end }}>Shared</a>
       </nav>
       {{ end }}
       <form class="logout" method="post" action="/logout">
@@ -82,15 +82,23 @@
     </header>
 
     <div class="wrap">
+      {{ if .Shared }}
+      <div class="balance{{ if .Balance.Even }} even{{ end }}" role="status" aria-label="{{ .Balance.Text }}">
+        <div class="b-main">
+          <span class="b-who">{{ .Balance.Who }}</span>
+          {{ if .Balance.Amount }}<span class="b-amt">{{ .Balance.Amount }}</span>{{ end }}
+        </div>
+        {{ if .Balance.SettleRaw }}<a class="settle" href="/shared?raw={{ .Balance.SettleRaw }}">Settle up</a>{{ end }}
+      </div>
+      {{ end }}
       <div class="shell">
         <section
           class="entry{{ if .Intent.IsEdit }} editing{{ end }}"
-          aria-label="Quick add"
+          aria-label="Entry"
         >
           <h2>
             {{ if .Intent.IsEdit }}Edit {{ if .Intent.IsSettlement }}settlement{{ else if .Intent.EditsIncome }}income{{ else
-            }}expense{{ end }}{{ else if .Intent.AddsPayback }}Quick add —
-            payback{{ else if .Shared }}Quick add — shared{{ else }}Quick add{{ end }}
+            }}expense{{ end }}{{ else if .Intent.AddsPayback }}Add payback{{ else if .Shared }}Add shared expense{{ else }}Add expense{{ end }}
           </h2>
           <form method="post" action="{{ .FormAction }}" autocomplete="off">
             {{ if .Shared }}<input type="hidden" name="tab" value="shared" />{{ end }}
@@ -108,7 +116,7 @@
             />
             <div class="payback-banner">
               <span class="chip link"
-                >↩ payback → {{ .Intent.ParentDescription }}</span
+                >Payback for {{ .Intent.ParentDescription }}</span
               >
               <a class="ghost cancel" href="{{ .TabPath }}">Cancel</a>
             </div>
@@ -121,6 +129,8 @@
               placeholder="{{ if .Shared }}12.50 dinner @home  -1{{ else }}12.50 lunch @work  -1{{ end }}"
               aria-label="Expense entry"
               autofocus
+              autocapitalize="off"
+              enterkeyhint="done"
               hx-post="/preview"
               hx-trigger="input changed delay:150ms, load"
               hx-target="#preview"
@@ -144,29 +154,30 @@
             <div id="preview">{{ template "preview" .Preview }}</div>
           </form>
           <p class="hint">
-            amount first · <b>@account</b> · <b>-N</b> days ago ·
-            <b>DD/MM</b>{{ if .Shared }} · <b>=</b> settle up (e.g.
-            <b>=40 bizum</b>){{ end }}
+            Amount first, then what it was. Add <b>@account</b>, <b>-1</b> for
+            yesterday or <b>5/7</b> for a date.{{ if .Shared }} Start with
+            <b>=</b> to settle up: <b>=40 bizum</b>.{{ end }}
           </p>
         </section>
 
-        <section class="list" aria-label="Expenses">
+        <section class="list" aria-label="{{ if .Shared }}Shared expenses{{ else }}Expenses{{ end }}">
           {{ if .Notice }}
           <p class="notice" role="status">{{ .Notice }}</p>
-          {{ end }} {{ if .Shared }}
-          <p class="balance{{ if .Balance.Even }} even{{ end }}" role="status">{{ .Balance.Text }}</p>
-          {{ end }} {{ template "list" .Groups }}
+          {{ end }}  {{ template "list" . }}
         </section>
       </div>
     </div>
   </body>
 </html>
-{{ define "list" }} {{ if not . }}
-<div class="empty">No expenses yet.</div>
-{{ else }} {{ range . }}
+{{ define "list" }} {{ if not .Groups }}
+<div class="empty">
+  <p>No expenses yet.</p>
+  <p>{{ if .Shared }}Add the first shared one above. It's split 50/50.{{ else }}Type one above, like <b>12.50 lunch @work</b>.{{ end }}</p>
+</div>
+{{ else }} {{ range .Groups }}
 <div class="daygroup">
   <div class="dayhead">
-    <span>{{ .Label }}</span><span class="tot">{{ .Total }}</span>
+    <span class="dh-label">{{ if .Rel }}<b>{{ .Rel }}</b>{{ end }}{{ .Label }}</span><span class="tot" title="Spent this day">{{ .Total }}</span>
   </div>
   {{ range .Rows }}
   {{ if .IsSettlement }}
@@ -174,12 +185,8 @@
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
-      <div class="meta-m">
-        <span class="chip paidby">{{ .Direction }}</span> {{ template "account" . }}
-      </div>
+      <div class="meta"><span class="chip paidby">{{ .Direction }}</span> {{ template "account" . }}</div>
     </div>
-    <div class="cell-acct">{{ template "account" . }}</div>
-    <div class="cell-split"><span class="chip paidby">{{ .Direction }}</span></div>
     {{ if .IsIncome }}{{ template "income-acts" . }}{{ else }}{{ template "expense-acts" . }}{{ end }}
   </div>
   {{ else if .IsIncome }}
@@ -187,10 +194,8 @@
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
-      <div class="meta-m">{{ template "account" . }}</div>
+      <div class="meta">{{ template "account" . }}</div>
     </div>
-    <div class="cell-acct">{{ template "account" . }}</div>
-    <div class="cell-split"></div>
     {{ template "income-acts" . }}
   </div>
   {{ else }}
@@ -205,15 +210,10 @@
     {{ end }}
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
-      <div class="meta-m">
-        {{ template "account" . }} {{ if .PaidBy }}<span class="chip paidby"
-          >paid by {{ .PaidBy }}</span
-        >{{ end }}
+      <div class="meta">
+        {{ if .PaidBy }}<span class="chip paidby">Paid by {{ .PaidBy }}</span>{{ end }}
+        {{ template "account" . }}
       </div>
-    </div>
-    <div class="cell-acct">{{ template "account" . }}</div>
-    <div class="cell-split">
-      {{ if .PaidBy }}<span class="chip paidby">{{ .PaidBy }}</span>{{ end }}
     </div>
     {{ template "expense-acts" . }} {{ if .HasPaybacks }}
     <details class="pb-disclosure">
@@ -225,12 +225,9 @@
         <div class="pb">
           <span class="pa">{{ .Amount }}</span>
           <div class="pb-body">
-            <span class="pb-desc">↩ {{ .Description }}</span>
-            <span class="pb-date">· {{ .DateLabel }}</span>
-            <div class="meta-m">{{ template "account" . }}</div>
+            <div class="pb-line"><span class="pb-desc">{{ .Description }}</span><span class="pb-date">{{ .DateLabel }}</span></div>
+            <div class="meta">{{ template "account" . }}</div>
           </div>
-          <div class="pb-acct">{{ template "account" . }}</div>
-          <div class="pb-split"></div>
           {{ template "income-acts" . }}
         </div>
         {{ end }}
@@ -307,7 +304,7 @@
 >{{ end }} {{ end }} {{ define "preview" }}
 <div class="preview chips" aria-label="Preview">
   {{ if .Empty }}
-  <span class="chip muted">live preview…</span>
+  <span class="chip muted">Type an entry; the live preview shows here.</span>
   {{ else }} {{ if .HasAmount }}<span
     class="chip amount{{ if .IsPayback }} credit{{ else if .IsIncome }} income{{ end }}"
     >{{ .Amount }}</span
@@ -320,10 +317,10 @@
 </div>
 {{ if .Errors }}
 <div class="gate-bad" role="alert">
-  ✗ {{ range $i, $e := .Errors }}{{ if $i }}, {{ end }}{{ $e }}{{ end }}
+  Can't save yet: {{ range $i, $e := .Errors }}{{ if $i }}, {{ end }}{{ $e }}{{ end }}
 </div>
 {{ else if not .Empty }}
-<div class="gate-ok">✓ ready</div>
+<div class="gate-ok">Ready to save</div>
 {{ end }}
 <div class="btnrow">
   <button class="primary" type="submit" {{ if .DisableSave }} disabled{{ end }}>
