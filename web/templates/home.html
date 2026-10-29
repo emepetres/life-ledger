@@ -92,12 +92,7 @@
         {{ if .Balance.ForgiveAmount }}
         <details class="forgive">
           <summary class="settle">Forgive</summary>
-          <form
-            method="post"
-            action="/forgive"
-            hx-boost="true"
-            hx-confirm="Forgive this amount? Carla's debt drops by it and no money moves."
-          >
+          <form method="post" action="/forgive">
             <label>Amount <input type="text" inputmode="decimal" name="amount" value="{{ .Balance.ForgiveAmount }}" /></label>
             <label>Date <input type="date" name="date" value="{{ .Today }}" max="{{ .Today }}" /></label>
             <button class="primary" type="submit">Forgive</button>
@@ -202,7 +197,7 @@
       <div class="d">{{ .Description }}</div>
       <div class="meta"><span class="chip paidby">Forgiven</span></div>
     </div>
-    {{ if $.IsOwner }}{{ template "forgiveness-acts" . }}{{ end }}
+    {{ if $.IsJavi }}{{ template "forgiveness-acts" . }}{{ end }}
   </div>
   {{ else if .IsSettlement }}
   <div class="row settlement">

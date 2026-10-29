@@ -11,7 +11,7 @@ import (
 // forgiveDateLayout is the value an HTML date input posts.
 const forgiveDateLayout = "2006-01-02"
 
-// handleForgive records a Forgiveness: Javi waiving what Carla owes him on the
+// handleForgive records a Forgiveness: Javi giving up what Carla owes him on the
 // Shared balance, without money moving (ADR-0016). Carla gets a 404, as for any
 // route outside her scope. Anything Javi cannot forgive — nothing owed, or Javi is
 // the debtor, a bad amount (zero, unreadable, above the balance) or a bad or
@@ -98,7 +98,7 @@ func (s *Server) newForgiveness(r *http.Request, balance expense.Balance) (*expe
 	return expense.NewForgiveness(date, amount), ""
 }
 
-// handleDeleteForgiveness undoes a Forgiveness, bringing the debt back. Only Javi
+// handleDeleteForgiveness undoes a Forgiveness, so Carla owes that amount again. Only Javi
 // made it, so only Javi can undo it: Carla gets a 404 like any route outside her
 // scope. An unknown id is a 404 too.
 func (s *Server) handleDeleteForgiveness(w http.ResponseWriter, r *http.Request) {

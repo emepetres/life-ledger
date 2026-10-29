@@ -104,18 +104,13 @@ func TestForgivenessRoundTrips(t *testing.T) {
 		t.Errorf("newest = %+v, want amount 2340 on %v", got[0], day)
 	}
 
-	one, err := s.GetForgiveness(ctx, older.ID)
-	if err != nil || one.Amount != 1200 {
-		t.Errorf("GetForgiveness = %+v, %v, want amount 1200", one, err)
-	}
-
 	if err := s.DeleteForgiveness(ctx, older.ID); err != nil {
 		t.Fatalf("DeleteForgiveness: %v", err)
 	}
 	if err := s.DeleteForgiveness(ctx, older.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("second delete err = %v, want ErrNotFound", err)
 	}
-	if _, err := s.GetForgiveness(ctx, older.ID); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("Get after delete err = %v, want ErrNotFound", err)
+	if left, _ := s.ListForgivenesses(ctx); len(left) != 1 || left[0].ID != newer.ID {
+		t.Errorf("after delete = %+v, want only the newer one", left)
 	}
 }

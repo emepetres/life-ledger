@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Javi forgiving what Carla owes him, with nothing filled in, waives the whole
+// Javi forgiving what Carla owes him, with nothing filled in, forgives the whole
 // balance as of today: the balance is square and no money record is created.
 func TestForgiveWholeBalanceByDefault(t *testing.T) {
 	ts, st := newTwoUserServer(t)

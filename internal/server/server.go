@@ -57,7 +57,6 @@ type Store interface {
 	// Forgivenesses are created, listed and deleted, never edited (ADR-0016).
 	ListForgivenesses(ctx context.Context) ([]expense.Forgiveness, error)
 	CreateForgiveness(ctx context.Context, f *expense.Forgiveness) error
-	GetForgiveness(ctx context.Context, id int64) (expense.Forgiveness, error)
 	DeleteForgiveness(ctx context.Context, id int64) error
 }
 
@@ -350,7 +349,7 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	v.Shared = v.Intent.IsShared()
 	v.TabPath = tabPath(v.Intent)
 	v.ShowTabs = !isCarla(r)
-	v.IsOwner = !isCarla(r)
+	v.IsJavi = !isCarla(r)
 	v.Today = s.now().Format(forgiveDateLayout)
 	if v.Shared {
 		// The balance runs over every stored record, not just what the list shows.

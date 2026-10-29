@@ -16,8 +16,8 @@ type Balance struct {
 // paybacks, which are assumed received by the Payer), so the other User owes the
 // Payer that half; Settlements then move the balance back: Javi's (an expense)
 // reduces what Javi owes Carla, Carla's (an income) reduces what Carla owes Javi.
-// A Forgiveness is Javi waiving what Carla owes him, so it counts like a Carla
-// settlement without any money having moved.
+// A Forgiveness is Javi giving up what Carla owes him, so it lowers that balance
+// as shown, without any money having moved.
 //
 // The arithmetic runs in doubled units so an odd cent never truncates; the
 // result is rounded to the nearest cent, half away from zero.
@@ -50,15 +50,22 @@ func SharedBalance(expenses []Expense, incomes []Income, forgivenesses []Forgive
 		}
 	}
 
+	// The balance as shown, in whole cents: Javi owes Carla this much (negative:
+	// Carla owes Javi). A Forgiveness forgives part of the balance as shown, so it
+	// comes off this rounded figure, never off the doubled one: forgiving the whole
+	// displayed balance must always leave it at zero, even on an odd cent.
+	owedByJavi := (owedByJavi2 + 1) / 2
+	if owedByJavi2 < 0 {
+		owedByJavi = -((-owedByJavi2 + 1) / 2)
+	}
 	for _, f := range forgivenesses {
-		owedByJavi2 += 2 * f.Amount
+		owedByJavi += f.Amount
 	}
 
-	debtor, magnitude := Javi, owedByJavi2
-	if owedByJavi2 < 0 {
-		debtor, magnitude = Carla, -owedByJavi2
+	debtor, amount := Javi, owedByJavi
+	if owedByJavi < 0 {
+		debtor, amount = Carla, -owedByJavi
 	}
-	amount := (magnitude + 1) / 2
 	if amount == 0 {
 		return Balance{}
 	}

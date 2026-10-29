@@ -33,7 +33,7 @@ A transfer of money between the two Users to settle the Shared balance, entered 
 _Avoid_: Repayment, payback (that is linked to an Expense)
 
 **Forgiveness**:
-Javi waiving what Carla owes him, without money moving: the **Shared balance** drops by the forgiven amount, to zero when he forgives all of it (the default). Only Javi can forgive, and only while Carla owes him; the amount is never more than the balance at that moment. It carries the forgiven amount and a date (today unless Javi picks another). It is not an Expense or Income and does not count in Javi's totals: the forgiven money is already in them, since Javi paid the full Amount of the Shared expenses. Listed only in the Shared tab, visible to both Users, and removable but never editable.
+Javi giving up what Carla owes him, without money moving: the **Shared balance** drops by the forgiven amount, to zero when he forgives all of it (the default). Only Javi can forgive, and only while Carla owes him; the amount is never more than the balance at that moment. It carries the forgiven amount and a date (today unless Javi picks another). It is not an Expense or Income and does not count in Javi's totals: the forgiven money is already in them, since Javi paid the full Amount of the Shared expenses. Listed only in the Shared tab, visible to both Users, and removable but never editable.
 _Avoid_: Write-off, debt cancellation, waiver, settlement (that moves real money)
 
 **Account** (tag):

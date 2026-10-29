@@ -1,9 +1,9 @@
 -- +goose Up
--- Forgiveness table, per ADR-0016: Javi waiving part or all of what Carla owes
+-- Forgiveness table, per ADR-0016: Javi giving up part or all of what Carla owes
 -- him on the Shared balance, without money moving. It is its own table (not an
 -- expense or income row) because those feed Javi's totals, and the forgiven money
 -- is already inside them. The amount is stored because the balance is derived and
--- a Forgiveness must remember what was waived at that moment. Date is ISO-8601
+-- a Forgiveness must remember what was forgiven at that moment. Date is ISO-8601
 -- TEXT, like every other date.
 CREATE TABLE forgiveness (
   id         INTEGER PRIMARY KEY,                 -- rowid alias, autoincrements

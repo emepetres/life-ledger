@@ -58,9 +58,9 @@ type homeView struct {
 	ShowTabs bool
 	// Balance is who owes whom, shown at the top of the Shared tab.
 	Balance balanceView
-	// IsOwner is true for Javi: only he can forgive what Carla owes him, or undo
+	// IsJavi is true for Javi: only he can forgive what Carla owes him, or undo
 	// that by deleting a Forgiveness (ADR-0016).
-	IsOwner bool
+	IsJavi bool
 	// Today is today's date as the Forgive form's date input wants it
 	// ("2026-07-21"): its default and its upper bound.
 	Today string
@@ -432,7 +432,7 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, forgivenes
 				ID:            f.ID,
 				IsForgiveness: true,
 				Amount:        formatEuro(f.Amount),
-				Description:   "Javi forgave Carla's debt",
+				Description:   "Javi forgave what Carla owed",
 			},
 		})
 	}

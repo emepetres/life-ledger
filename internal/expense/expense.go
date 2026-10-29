@@ -73,7 +73,7 @@ type Income struct {
 	Settlement      bool
 }
 
-// Forgiveness is Javi waiving part or all of what Carla owes him (CONTEXT.md,
+// Forgiveness is Javi giving up part or all of what Carla owes him (CONTEXT.md,
 // ADR-0016). It is not an Expense or Income and never counts in Javi's totals;
 // it only lowers the Shared balance. Amount is the positive forgiven magnitude
 // in minor units, fixed at the moment it was recorded.

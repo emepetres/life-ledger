@@ -162,6 +162,16 @@ func TestSharedBalance(t *testing.T) {
 			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 5000)},
 		},
 		{
+			name:          "forgiving the whole displayed balance of an odd cent leaves it even: javi paid 0.01 => carla owes 0.01, forgave 0.01",
+			expenses:      []expense.Expense{sharedExp(1, 1, expense.Javi)},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 1)},
+		},
+		{
+			name:          "forgiving the whole displayed balance of 1.01 leaves it even: carla owes 0.51, forgave 0.51",
+			expenses:      []expense.Expense{sharedExp(1, 101, expense.Javi)},
+			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 51)},
+		},
+		{
 			name:          "partial forgiveness: javi paid 100, forgave 20 => carla owes 30",
 			expenses:      []expense.Expense{sharedExp(1, 10000, expense.Javi)},
 			forgivenesses: []expense.Forgiveness{*expense.NewForgiveness(sharedToday, 2000)},

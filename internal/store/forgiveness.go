@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -52,17 +50,6 @@ func (s *Store) ListForgivenesses(ctx context.Context) ([]expense.Forgiveness, e
 		return nil, fmt.Errorf("listing forgivenesses: %w", err)
 	}
 	return out, nil
-}
-
-// GetForgiveness returns the Forgiveness with the given id, or ErrNotFound.
-func (s *Store) GetForgiveness(ctx context.Context, id int64) (expense.Forgiveness, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, date, amount, created_at FROM forgiveness WHERE id = ?`, id)
-	f, err := scanForgiveness(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return expense.Forgiveness{}, ErrNotFound
-	}
-	return f, err
 }
 
 // DeleteForgiveness removes the Forgiveness with the given id, or returns
