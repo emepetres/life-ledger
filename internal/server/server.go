@@ -9,6 +9,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -18,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emepetres/life-ledger/internal/auth"
@@ -88,7 +91,13 @@ func WithGuard(g *auth.Guard) Option {
 // New builds the application's HTTP handler with all routes registered, backed
 // by the given store.
 func New(store Store, opts ...Option) (http.Handler, error) {
-	tmpl, err := template.ParseFS(web.Templates, "templates/*.html")
+	staticFS, err := fs.Sub(web.Static, "static")
+	if err != nil {
+		return nil, fmt.Errorf("mounting static assets: %w", err)
+	}
+
+	tmpl, err := template.New("").Funcs(template.FuncMap{"asset": assetURL(staticFS)}).
+		ParseFS(web.Templates, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parsing templates: %w", err)
 	}
@@ -98,11 +107,6 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	htmxSrc, err := vendoredHTMXSrc()
 	if err != nil {
 		return nil, err
-	}
-
-	staticFS, err := fs.Sub(web.Static, "static")
-	if err != nil {
-		return nil, fmt.Errorf("mounting static assets: %w", err)
 	}
 
 	s := &Server{
@@ -794,6 +798,28 @@ func errorMessages(errs []expense.ParseError, in expense.Intent) []string {
 		}
 	}
 	return msgs
+}
+
+// assetURL returns the template func that links an embedded static asset under a
+// content-hash query string. Browsers and the Cloudflare edge cache /static/
+// files for hours, so a changed file must be linked under a new URL to be picked
+// up. Hashes are computed once per asset; an unknown asset fails the render
+// rather than silently dropping the cache-busting.
+func assetURL(static fs.FS) func(string) (string, error) {
+	var cache sync.Map
+	return func(name string) (string, error) {
+		if v, ok := cache.Load(name); ok {
+			return v.(string), nil
+		}
+		b, err := fs.ReadFile(static, name)
+		if err != nil {
+			return "", fmt.Errorf("asset %q: %w", name, err)
+		}
+		sum := sha256.Sum256(b)
+		url := "/static/" + name + "?v=" + hex.EncodeToString(sum[:])[:12]
+		cache.Store(name, url)
+		return url, nil
+	}
 }
 
 // vendoredHTMXSrc finds the single vendored htmx asset and returns the URL path
