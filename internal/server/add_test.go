@@ -137,6 +137,9 @@ func TestListGroupedByDayNewestFirst(t *testing.T) {
 	if today < 0 || yesterday < 0 {
 		t.Fatalf("missing day headers; got:\n%s", body)
 	}
+	if !strings.Contains(body, "<b>Today</b>") || !strings.Contains(body, "<b>Yesterday</b>") {
+		t.Errorf("the two newest days should read Today and Yesterday; got:\n%s", body)
+	}
 	if today > yesterday {
 		t.Errorf("today's group should come before yesterday's (newest first)")
 	}

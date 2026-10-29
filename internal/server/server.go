@@ -234,7 +234,8 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 // handleShared renders the Shared tab, whose add form registers a line as paid by
 // whoever is logged in.
 func (s *Server) handleShared(w http.ResponseWriter, r *http.Request) {
-	s.renderHome(w, r, http.StatusOK, homeView{Intent: expense.AddShared(userPayer(r))})
+	// ?raw= prefills the box (the balance's settle-up link).
+	s.renderHome(w, r, http.StatusOK, homeView{Intent: expense.AddShared(userPayer(r)), Raw: r.URL.Query().Get("raw")})
 }
 
 // handleLoginForm renders the login page. An already-authenticated visitor is
@@ -333,7 +334,7 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	v.ShowTabs = !isCarla(r)
 	if v.Shared {
 		// The balance runs over every stored record, not just what the list shows.
-		v.Balance = buildBalance(expense.SharedBalance(expenses, incomes))
+		v.Balance = buildBalance(expense.SharedBalance(expenses, incomes), userPayer(r))
 	}
 	v.Preview = buildPreview(v.Raw, v.Intent, expense.Submit(v.Intent, v.Raw, s.now()), false)
 	tabExpenses, tabIncomes := tabRecords(expenses, incomes, v.Shared)

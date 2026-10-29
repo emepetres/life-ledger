@@ -25,7 +25,7 @@ The User who paid a shared expense (`paid_by`): whoever registered it, correctab
 _Avoid_: Owner, author
 
 **Shared balance** (derived):
-Who owes whom, and how much, shown at the top of the Shared tab ("Javi owes Carla 23,40 €", or "Estáis a mano"). Never stored: for each shared expense, the Payer is owed half its **Net cost** by the other User; **Settlements** then move it back. Paybacks on a shared expense are assumed received by its Payer.
+Who owes whom, and how much, shown at the top of the Shared tab ("Javi owes Carla €23.40", or "All square"), with a one-tap "Settle up" for whoever owes. Never stored: for each shared expense, the Payer is owed half its **Net cost** by the other User; **Settlements** then move it back. Paybacks on a shared expense are assumed received by its Payer.
 _Avoid_: Debt, total owed
 
 **Settlement**:

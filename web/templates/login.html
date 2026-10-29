@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="app-header">
-    <div class="logo">£</div>
+    <div class="logo" aria-hidden="true">€</div>
     <div>
       <h1>Life Ledger</h1>
       <div class="sub">Personal expense register</div>
@@ -22,7 +22,7 @@
       <form method="post" action="/login" autocomplete="off">
         <input class="qa-input" type="password" name="password"
                placeholder="Password" aria-label="Password" autofocus required>
-        {{ if .Error }}<div class="gate-bad" role="alert">✗ {{ .Error }}</div>{{ end }}
+        {{ if .Error }}<div class="gate-bad" role="alert">{{ .Error }}</div>{{ end }}
         <div class="btnrow">
           <button class="primary" type="submit">Log in</button>
         </div>
