@@ -73,6 +73,23 @@ type Income struct {
 	Settlement      bool
 }
 
+// Forgiveness is Javi waiving part or all of what Carla owes him (CONTEXT.md,
+// ADR-0016). It is not an Expense or Income and never counts in Javi's totals;
+// it only lowers the Shared balance. Amount is the positive forgiven magnitude
+// in minor units, fixed at the moment it was recorded.
+type Forgiveness struct {
+	ID        int64
+	Date      time.Time
+	Amount    int
+	CreatedAt time.Time
+}
+
+// NewForgiveness assembles a Forgiveness from its resolved fields, leaving the
+// store-owned ID and CreatedAt zero.
+func NewForgiveness(date time.Time, amount int) *Forgiveness {
+	return &Forgiveness{Date: date, Amount: amount}
+}
+
 // NewExpense assembles an Expense from its resolved fields, leaving the
 // store-owned identity (ID) and timestamps zero for the store to stamp. It
 // exists because entry is unexported — callers outside this package build

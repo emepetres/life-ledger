@@ -39,7 +39,7 @@ internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
                      Income linked to an Expense. An Expense also carries who
                      paid it (`PaidBy`) and whether it is a Settlement; the
                      Shared balance (`SharedBalance`) is derived from them
-                     (ADR-0015). The entry gate:
+                     and from the Forgiveness records (ADR-0015, ADR-0016). The entry gate:
                      Submit(Intent, raw, today) parses the line and applies the
                      Intent's kind rules (add, add payback, edit expense, edit
                      income — an edit keeps the record's kind; the edit window
@@ -71,8 +71,9 @@ internal/server/     HTTP surface. Routes and handlers for the home page,
                      whatever record expense.Submit returns, so preview and
                      save can't disagree; the pre-linked
                      payback start (/payback/{expenseID}), the two tabs (`/`
-                     ordinary, `/shared` shared + settlements + balance; Carla
-                     is confined to the latter), login/logout, and the
+                     ordinary, `/shared` shared + settlements + forgivenesses + balance;
+                     Carla is confined to the latter), `POST /forgive` (Javi only,
+                     ADR-0016), login/logout, and the
                      unauthenticated health check. view.go assembles the net-first,
                      day-grouped feed (net cost derived at render time; stored
                      amount stays full) into one discriminated rowView; renders

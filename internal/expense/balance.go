@@ -10,16 +10,18 @@ type Balance struct {
 	Amount int
 }
 
-// SharedBalance derives the Shared balance from every stored expense and income —
-// it never reads anything else and stores nothing. Each Shared expense costs both
-// Users half of its Net cost (the full Amount less its linked paybacks, which are
-// assumed received by the Payer), so the other User owes the Payer that half;
-// Settlements then move the balance back: Javi's (an expense) reduces what Javi
-// owes Carla, Carla's (an income) reduces what Carla owes Javi.
+// SharedBalance derives the Shared balance from every stored expense, income and
+// Forgiveness — it never reads anything else and stores nothing. Each Shared
+// expense costs both Users half of its Net cost (the full Amount less its linked
+// paybacks, which are assumed received by the Payer), so the other User owes the
+// Payer that half; Settlements then move the balance back: Javi's (an expense)
+// reduces what Javi owes Carla, Carla's (an income) reduces what Carla owes Javi.
+// A Forgiveness is Javi waiving what Carla owes him, so it counts like a Carla
+// settlement without any money having moved.
 //
 // The arithmetic runs in doubled units so an odd cent never truncates; the
 // result is rounded to the nearest cent, half away from zero.
-func SharedBalance(expenses []Expense, incomes []Income) Balance {
+func SharedBalance(expenses []Expense, incomes []Income, forgivenesses []Forgiveness) Balance {
 	paybacks := make(map[int64]int)
 	for _, i := range incomes {
 		if i.LinkedExpenseID != nil {
@@ -46,6 +48,10 @@ func SharedBalance(expenses []Expense, incomes []Income) Balance {
 		if i.Settlement {
 			owedByJavi2 += 2 * i.Amount
 		}
+	}
+
+	for _, f := range forgivenesses {
+		owedByJavi2 += 2 * f.Amount
 	}
 
 	debtor, magnitude := Javi, owedByJavi2

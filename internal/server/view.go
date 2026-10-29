@@ -58,6 +58,12 @@ type homeView struct {
 	ShowTabs bool
 	// Balance is who owes whom, shown at the top of the Shared tab.
 	Balance balanceView
+	// IsOwner is true for Javi: only he can forgive what Carla owes him, or undo
+	// that by deleting a Forgiveness (ADR-0016).
+	IsOwner bool
+	// Today is today's date as the Forgive form's date input wants it
+	// ("2026-07-21"): its default and its upper bound.
+	Today string
 }
 
 // balanceView is the Shared balance as shown: one sentence, and whether the two
@@ -72,6 +78,9 @@ type balanceView struct {
 	// SettleRaw prefills the entry box ("=50.00") for the user who owes, so
 	// settling up is one tap; empty for the creditor and when even.
 	SettleRaw string
+	// ForgiveAmount prefills the Forgive form ("50.25") for Javi while Carla owes
+	// him; empty otherwise, which hides the form (ADR-0016).
+	ForgiveAmount string
 }
 
 // payerName is a Payer as shown to people.
@@ -98,6 +107,9 @@ func buildBalance(b expense.Balance, viewer expense.Payer) balanceView {
 	v := balanceView{Text: who + " " + amount, Who: who, Amount: amount}
 	if viewer == b.Debtor {
 		v.SettleRaw = fmt.Sprintf("=%d.%02d", b.Amount/100, b.Amount%100)
+	}
+	if viewer == expense.Javi && b.Debtor == expense.Carla {
+		v.ForgiveAmount = fmt.Sprintf("%d.%02d", b.Amount/100, b.Amount%100)
 	}
 	return v
 }
@@ -242,6 +254,9 @@ type rowView struct {
 	// kind-qualified endpoints.
 	IsSettlement bool
 	Direction    string
+	// IsForgiveness marks a Forgiveness (ADR-0016): listed in a neutral colour,
+	// outside the day total, deletable by Javi and never editable.
+	IsForgiveness bool
 	// Editable gates the row's Edit link: false for a record too old to edit
 	// (its date a year old or older), so the list only offers edits that can't
 	// shift the date (ADR-0008). Set for both expense and standalone-income rows.
@@ -323,7 +338,7 @@ type feedItem struct {
 // LinkedExpenseID) are not standalone rows: they are bucketed onto their parent
 // expense, where the derived net cost (paid − Σ paybacks) nets the parent's
 // contribution to its day total.
-func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.Time) []dayGroup {
+func groupByDay(expenses []expense.Expense, incomes []expense.Income, forgivenesses []expense.Forgiveness, now time.Time) []dayGroup {
 	paybacks, standalone := bucketIncomes(incomes)
 
 	feed := make([]feedItem, 0, len(expenses)+len(standalone))
@@ -402,6 +417,22 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 				Account:        accountLabel(i.Account),
 				AccountDefault: i.Account == nil,
 				Editable:       expense.Editable(i.Date, now),
+			},
+		})
+	}
+
+	// A Forgiveness is neither an expense nor an income: it is listed for the
+	// record only, with no cost, so it never moves its day's total (ADR-0016).
+	for _, f := range forgivenesses {
+		feed = append(feed, feedItem{
+			date:      f.Date,
+			createdAt: f.CreatedAt,
+			cost:      0,
+			row: rowView{
+				ID:            f.ID,
+				IsForgiveness: true,
+				Amount:        formatEuro(f.Amount),
+				Description:   "Javi forgave Carla's debt",
 			},
 		})
 	}

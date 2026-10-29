@@ -247,6 +247,17 @@ func amountMinorUnits(tok string) int {
 	return total
 }
 
+// ParseAmount reads a bare amount as the entry line would ("20", "12.50",
+// "7,6") into minor units, reporting false when it is not a plain non-negative
+// number. It lets other inputs (the Forgive form) accept amounts exactly as the
+// entry box does.
+func ParseAmount(s string) (int, bool) {
+	if !bareNumberRe.MatchString(s) {
+		return 0, false
+	}
+	return amountMinorUnits(s), true
+}
+
 // splitDecimal splits a bare number into its integer and fractional parts,
 // accepting either decimal separator.
 func splitDecimal(tok string) (intPart, fracPart string, hasFrac bool) {

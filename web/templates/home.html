@@ -89,6 +89,21 @@
           {{ if .Balance.Amount }}<span class="b-amt">{{ .Balance.Amount }}</span>{{ end }}
         </div>
         {{ if .Balance.SettleRaw }}<a class="settle" href="/shared?raw={{ .Balance.SettleRaw }}">Settle up</a>{{ end }}
+        {{ if .Balance.ForgiveAmount }}
+        <details class="forgive">
+          <summary class="settle">Forgive</summary>
+          <form
+            method="post"
+            action="/forgive"
+            hx-boost="true"
+            hx-confirm="Forgive this amount? Carla's debt drops by it and no money moves."
+          >
+            <label>Amount <input type="text" inputmode="decimal" name="amount" value="{{ .Balance.ForgiveAmount }}" /></label>
+            <label>Date <input type="date" name="date" value="{{ .Today }}" max="{{ .Today }}" /></label>
+            <button class="primary" type="submit">Forgive</button>
+          </form>
+        </details>
+        {{ end }}
       </div>
       {{ end }}
       <div class="shell">
@@ -180,7 +195,16 @@
     <span class="dh-label">{{ if .Rel }}<b>{{ .Rel }}</b>{{ end }}{{ .Label }}</span><span class="tot" title="Spent this day">{{ .Total }}</span>
   </div>
   {{ range .Rows }}
-  {{ if .IsSettlement }}
+  {{ if .IsForgiveness }}
+  <div class="row forgiveness">
+    <div class="amt">{{ .Amount }}</div>
+    <div class="desc-cell">
+      <div class="d">{{ .Description }}</div>
+      <div class="meta"><span class="chip paidby">Forgiven</span></div>
+    </div>
+    {{ if $.IsOwner }}{{ template "forgiveness-acts" . }}{{ end }}
+  </div>
+  {{ else if .IsSettlement }}
   <div class="row settlement">
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
@@ -260,6 +284,24 @@
     action="/delete/expense/{{ .ID }}"
     hx-boost="true"
     hx-confirm="{{ if .HasPaybacks }}Delete this expense and its {{ .PaybackCount }} payback{{ if ne .PaybackCount 1 }}s{{ end }}? This can't be undone.{{ else }}Delete this expense? This can't be undone.{{ end }}"
+  >
+    <button
+      class="ghost icon-btn danger"
+      type="submit"
+      aria-label="Delete"
+      title="Delete"
+    >
+      <svg class="icon" aria-hidden="true"><use href="#icon-delete"></use></svg>
+    </button>
+  </form>
+</div>
+{{ end }} {{ define "forgiveness-acts" }}
+<div class="acts">
+  <form
+    method="post"
+    action="/delete/forgiveness/{{ .ID }}"
+    hx-boost="true"
+    hx-confirm="Delete this forgiveness? Carla will owe you that amount again."
   >
     <button
       class="ghost icon-btn danger"
