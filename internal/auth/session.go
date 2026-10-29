@@ -24,11 +24,19 @@ const cookieName = "ll_session"
 // request re-issues a fresh cookie, so active use never expires.
 const sessionMaxAge = 30 * 24 * time.Hour
 
-// sessionValue is the constant payload carried in the signed cookie. The single
-// shared password means the session needs no per-user identity; the value exists
-// only so there is something to sign and version. The HMAC and the embedded
-// timestamp — not this string — are what make the cookie unforgeable.
-const sessionValue = "1"
+// User is who is logged in: the owner (Javi) or the partner (Carla). Which
+// password was entered decides it, and the signed cookie carries it as its
+// payload; the HMAC and the embedded timestamp are what make it unforgeable.
+type User string
+
+const (
+	Javi  User = "javi"
+	Carla User = "carla"
+)
+
+// legacySessionValue is the payload of cookies issued before users existed, when
+// the one shared password was Javi's: they stay valid, and read as Javi.
+const legacySessionValue = "1"
 
 // Sessions issues and validates the signed, stateless session cookie. It wraps a
 // gorilla/securecookie codec (a vetted HMAC implementation) keyed by a signing
@@ -51,12 +59,12 @@ func newSessions(signingSecret []byte, secure bool) *Sessions {
 	return &Sessions{codec: codec, secure: secure}
 }
 
-// Issue writes a fresh session cookie with a sliding 30-day expiry. Called on a
-// successful login and again on every authenticated request, so continued use
-// keeps extending the window. HttpOnly and SameSite=Lax are always set; Secure
-// follows the configured environment.
-func (s *Sessions) Issue(w http.ResponseWriter) {
-	encoded, err := s.codec.Encode(cookieName, sessionValue)
+// Issue writes a fresh session cookie for user with a sliding 30-day expiry.
+// Called on a successful login and again on every authenticated request, so
+// continued use keeps extending the window. HttpOnly and SameSite=Lax are always
+// set; Secure follows the configured environment.
+func (s *Sessions) Issue(w http.ResponseWriter, user User) {
+	encoded, err := s.codec.Encode(cookieName, string(user))
 	if err != nil {
 		// Encoding a constant with a valid key does not fail in practice; if it
 		// somehow did, simply issue no cookie rather than a malformed one.
@@ -73,15 +81,32 @@ func (s *Sessions) Issue(w http.ResponseWriter) {
 	})
 }
 
-// Valid reports whether the request carries a well-signed, unexpired session
-// cookie. A missing, tampered, wrong-key, or too-old cookie all read as false.
-func (s *Sessions) Valid(r *http.Request) bool {
+// User reports who the request's session cookie belongs to, and whether it is a
+// well-signed, unexpired cookie at all. A missing, tampered, wrong-key, too-old,
+// or unrecognised-payload cookie all read as not ok.
+func (s *Sessions) User(r *http.Request) (User, bool) {
 	c, err := r.Cookie(cookieName)
 	if err != nil {
-		return false
+		return "", false
 	}
 	var v string
-	return s.codec.Decode(cookieName, c.Value, &v) == nil
+	if s.codec.Decode(cookieName, c.Value, &v) != nil {
+		return "", false
+	}
+	switch User(v) {
+	case Javi, Carla:
+		return User(v), true
+	}
+	if v == legacySessionValue {
+		return Javi, true
+	}
+	return "", false
+}
+
+// Valid reports whether the request carries a valid session cookie.
+func (s *Sessions) Valid(r *http.Request) bool {
+	_, ok := s.User(r)
+	return ok
 }
 
 // Clear expires the session cookie, ending the session on the client. The flags

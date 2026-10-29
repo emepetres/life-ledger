@@ -70,24 +70,6 @@ func TestAddValidRedirects(t *testing.T) {
 	}
 }
 
-// AC: the full paid amount is stored regardless of '*' (the half is display/math
-// for a later slice; nothing is halved on save).
-func TestAddStoresFullAmountRegardlessOfSplit(t *testing.T) {
-	ts := newTestServer(t)
-
-	_, body := postAdd(t, ts, "10 dinner *")
-	if !strings.Contains(body, "€10.00") {
-		t.Errorf("split expense should store the full €10.00; got:\n%s", body)
-	}
-	if strings.Contains(body, "€5.00") {
-		t.Errorf("amount must not be halved on save; got:\n%s", body)
-	}
-	// The half is surfaced as the split badge/marker.
-	if !strings.Contains(body, "½") {
-		t.Errorf("split expense should surface a ½ marker; got:\n%s", body)
-	}
-}
-
 // AC: an account-less row shows "@personal" everywhere, never blank.
 func TestAddBlankAccountShowsPersonal(t *testing.T) {
 	ts := newTestServer(t)

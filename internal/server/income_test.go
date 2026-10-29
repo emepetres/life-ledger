@@ -73,30 +73,6 @@ func TestStandaloneIncomeRowWiresKindQualifiedControls(t *testing.T) {
 	}
 }
 
-// AC: POST /add with "+… *" is rejected by the server-side save gate (an income
-// can't be split), storing nothing.
-func TestAddIncomeWithSplitRejected(t *testing.T) {
-	ts := newTestServer(t)
-
-	resp, body := postAdd(t, ts, "+40 refund *")
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("POST /add %q status = %d, want 422", "+40 refund *", resp.StatusCode)
-	}
-	if !strings.Contains(body, "cannot split an income") {
-		t.Errorf("rejection should surface the split-on-income message; got:\n%s", body)
-	}
-	// The offending line is echoed back into the box (the leading '+' is HTML
-	// attribute-escaped to &#43;, so match on the rest of the verbatim line).
-	if !strings.Contains(body, "40 refund *") {
-		t.Errorf("rejected income should be echoed back into the box; got:\n%s", body)
-	}
-	// Nothing stored: the ledger is still empty.
-	_, home := get(t, ts, "/")
-	if !strings.Contains(home, "No expenses yet") {
-		t.Errorf("a rejected income must persist nothing; got:\n%s", home)
-	}
-}
-
 // AC: the live preview of a "+…" line with no active payback link shows a blue
 // "€X.XX" chip with no leading '−', alongside the resolved date/description/
 // account chips (ADR-0009 amendment, #59/#63).
@@ -126,22 +102,5 @@ func TestPreviewStandaloneIncomeShowsBlueChip(t *testing.T) {
 	// An income is never split, so no ½ badge even in the preview.
 	if strings.Contains(body, "½") {
 		t.Errorf("income preview should never show a split badge; got:\n%s", body)
-	}
-}
-
-// AC: a stray '*' on an income preview surfaces the fix message and suppresses
-// the split badge (the badge is an expense concept).
-func TestPreviewIncomeWithSplitBlocks(t *testing.T) {
-	ts := newTestServer(t)
-
-	_, body := postPreview(t, ts, "+40 refund *")
-	if !strings.Contains(body, "cannot split an income") {
-		t.Errorf("income-with-'*' preview should surface the fix message; got:\n%s", body)
-	}
-	if strings.Contains(body, "½") {
-		t.Errorf("income preview must not show a split badge; got:\n%s", body)
-	}
-	if !strings.Contains(body, "disabled") {
-		t.Errorf("invalid income should disable the save control; got:\n%s", body)
 	}
 }

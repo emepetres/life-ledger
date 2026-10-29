@@ -151,11 +151,12 @@ func New(store Store, opts ...Option) (http.Handler, error) {
 	// expense (the link is set out-of-band, never typed). A 404 for an unknown id.
 	mux.HandleFunc("GET /payback/{id}", s.handlePaybackStart)
 
-	// Splittypie export: download the Split expenses from a chosen day through
-	// today as splittypie quick-add lines. A plain GET so it works without JS.
-	mux.HandleFunc("GET /export/splittypie", s.handleSplittypieExport)
+	// The Shared tab: the shared expenses and settlements, with who owes whom.
+	// It is the only page Carla sees.
+	mux.HandleFunc("GET /shared", s.handleShared)
 
-	// Home page. Registered last as the catch-all for "/" so unknown paths 404.
+	// Home page (the ordinary tab). Registered last as the catch-all for "/" so
+	// unknown paths 404.
 	mux.HandleFunc("GET /{$}", s.handleHome)
 
 	if s.guard == nil {
@@ -180,17 +181,67 @@ func unauthenticatedOK(r *http.Request) bool {
 	return p == "/login" || p == "/health" || strings.HasPrefix(p, "/static/")
 }
 
-// handleHome renders the full page: the quick-add form (in add mode) and the
-// day-grouped list.
+// Tab paths and the form value that tells /add and /preview which tab a line was
+// typed in.
+const (
+	ordinaryPath = "/"
+	sharedPath   = "/shared"
+	tabShared    = "shared"
+)
+
+// homePath is where a user lands: Javi on his ledger, Carla — who has no other —
+// on the Shared tab.
+func homePath(u auth.User) string {
+	if u == auth.Carla {
+		return sharedPath
+	}
+	return ordinaryPath
+}
+
+// userPayer is the Payer of what the logged-in user registers.
+func userPayer(r *http.Request) expense.Payer {
+	return expense.Payer(auth.UserFrom(r.Context()))
+}
+
+// isCarla reports whether the request belongs to the partner, who may only see
+// and touch the Shared tab.
+func isCarla(r *http.Request) bool { return auth.UserFrom(r.Context()) == auth.Carla }
+
+// sharedTab reports whether a line posted from r belongs to the Shared tab:
+// always for Carla, whatever the form claims, else when the form says so.
+func sharedTab(r *http.Request) bool {
+	return isCarla(r) || r.PostFormValue("tab") == tabShared
+}
+
+// tabPath is the tab an Intent belongs to.
+func tabPath(in expense.Intent) string {
+	if in.IsShared() {
+		return sharedPath
+	}
+	return ordinaryPath
+}
+
+// handleHome renders the ordinary tab: the quick-add form (in add mode) and the
+// day-grouped list. Carla has no ordinary tab, so she is sent to the Shared one.
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	if isCarla(r) {
+		http.Redirect(w, r, sharedPath, http.StatusSeeOther)
+		return
+	}
 	s.renderHome(w, r, http.StatusOK, homeView{Intent: expense.Add()})
+}
+
+// handleShared renders the Shared tab, whose add form registers a line as paid by
+// whoever is logged in.
+func (s *Server) handleShared(w http.ResponseWriter, r *http.Request) {
+	s.renderHome(w, r, http.StatusOK, homeView{Intent: expense.AddShared(userPayer(r))})
 }
 
 // handleLoginForm renders the login page. An already-authenticated visitor is
 // sent home rather than shown the form again.
 func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	if s.guard.Authenticated(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if user, ok := s.guard.User(r); ok {
+		http.Redirect(w, r, homePath(user), http.StatusSeeOther)
 		return
 	}
 	s.renderLogin(w, http.StatusOK, "")
@@ -198,7 +249,8 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 
 // handleLogin verifies the submitted password through the guard (which spends a
 // per-IP rate-limit token first, then does the bcrypt compare) and, on success,
-// sets the session cookie and redirects home (Post/Redirect/Get). A wrong
+// sets the session cookie — for whichever user the password belongs to — and
+// redirects to that user's tab (Post/Redirect/Get). A wrong
 // password re-renders the form at 401; too many rapid attempts at 429. The
 // password is never echoed back.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -206,9 +258,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	switch err := s.guard.Login(w, r, r.PostFormValue("password")); {
+	switch user, err := s.guard.Login(w, r, r.PostFormValue("password")); {
 	case err == nil:
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, homePath(user), http.StatusSeeOther)
 	case errors.Is(err, auth.ErrRateLimited):
 		s.renderLogin(w, http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
 	default: // auth.ErrInvalidCredentials
@@ -276,11 +328,16 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 	if v.Intent.IsEdit() {
 		v.EditKind = routeKind(v.Intent)
 	}
-	if v.ExportFrom == "" {
-		v.ExportFrom = firstOfMonth(s.now()).Format(isoDate)
+	v.Shared = v.Intent.IsShared()
+	v.TabPath = tabPath(v.Intent)
+	v.ShowTabs = !isCarla(r)
+	if v.Shared {
+		// The balance runs over every stored record, not just what the list shows.
+		v.Balance = buildBalance(expense.SharedBalance(expenses, incomes))
 	}
 	v.Preview = buildPreview(v.Raw, v.Intent, expense.Submit(v.Intent, v.Raw, s.now()), false)
-	v.Groups = groupByDay(expenses, incomes, s.now())
+	tabExpenses, tabIncomes := tabRecords(expenses, incomes, v.Shared)
+	v.Groups = groupByDay(tabExpenses, tabIncomes, s.now())
 	s.render(w, status, v)
 }
 
@@ -292,7 +349,8 @@ func (s *Server) renderHome(w http.ResponseWriter, r *http.Request, status int, 
 // re-renders the page at 422 with the offending text, still under the same
 // Intent so a payback keeps its banner and hidden link, storing nothing. A
 // payback whose parent no longer exists is a 409 back under the plain add
-// Intent, with a note.
+// Intent, with a note. What a plain add becomes depends on the tab it was typed
+// in (the hidden tab field; always the Shared tab for Carla) and on who typed it.
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -304,7 +362,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errParentGone):
 		s.renderHome(w, r, http.StatusConflict, homeView{
 			Raw:    raw,
-			Intent: expense.Add(),
+			Intent: s.plainAdd(r),
 			Notice: "That expense no longer exists, so the payback wasn't saved.",
 		})
 		return
@@ -329,7 +387,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, tabPath(in), http.StatusSeeOther)
 }
 
 // addAction is the quick-add form's action in add mode; edit mode swaps in an
@@ -382,7 +440,7 @@ var (
 // edit window.
 func (s *Server) editIntent(ctx context.Context, kind string, id int64) (expense.Intent, string, error) {
 	if kind == kindIncome {
-		i, err := s.store.GetIncome(ctx, id)
+		i, shared, err := s.loadIncome(ctx, id)
 		if err != nil {
 			return expense.Intent{}, "", err
 		}
@@ -390,9 +448,9 @@ func (s *Server) editIntent(ctx context.Context, kind string, id int64) (expense
 		if !ok {
 			return expense.Intent{}, "", errNotEditable
 		}
-		return in, i.EntryLine(), nil
+		return in.WithSharedTab(shared), i.EntryLine(), nil
 	}
-	e, err := s.store.Get(ctx, id)
+	e, err := s.loadExpense(ctx, id)
 	if err != nil {
 		return expense.Intent{}, "", err
 	}
@@ -401,6 +459,50 @@ func (s *Server) editIntent(ctx context.Context, kind string, id int64) (expense
 		return expense.Intent{}, "", errNotEditable
 	}
 	return in, e.EntryLine(), nil
+}
+
+// loadExpense is Get under the caller's scope: Carla sees only what is in the
+// Shared tab, so anything else answers as if it did not exist.
+func (s *Server) loadExpense(ctx context.Context, id int64) (expense.Expense, error) {
+	e, err := s.store.Get(ctx, id)
+	if err != nil {
+		return expense.Expense{}, err
+	}
+	if auth.UserFrom(ctx) == auth.Carla && !inSharedTab(e) {
+		return expense.Expense{}, store.ErrNotFound
+	}
+	return e, nil
+}
+
+// loadIncome is GetIncome under the caller's scope, also reporting whether the
+// income belongs to the Shared tab: a settlement does, and so does a payback of a
+// shared expense.
+func (s *Server) loadIncome(ctx context.Context, id int64) (i expense.Income, shared bool, err error) {
+	i, err = s.store.GetIncome(ctx, id)
+	if err != nil {
+		return expense.Income{}, false, err
+	}
+	shared = i.Settlement
+	if i.LinkedExpenseID != nil {
+		parent, err := s.store.Get(ctx, *i.LinkedExpenseID)
+		if err != nil {
+			return expense.Income{}, false, err
+		}
+		shared = parent.Shared
+	}
+	if auth.UserFrom(ctx) == auth.Carla && !shared {
+		return expense.Income{}, false, store.ErrNotFound
+	}
+	return i, shared, nil
+}
+
+// plainAdd is the Intent of a line typed in the add box: a Shared one (paid by
+// the typist) in the Shared tab, an ordinary one otherwise.
+func (s *Server) plainAdd(r *http.Request) expense.Intent {
+	if sharedTab(r) {
+		return expense.AddShared(userPayer(r))
+	}
+	return expense.Add()
 }
 
 // previewIntent rebuilds the quick-add box's Intent for a /preview swap from
@@ -423,9 +525,9 @@ func (s *Server) previewIntent(r *http.Request) (expense.Intent, error) {
 func (s *Server) addIntent(r *http.Request) (expense.Intent, error) {
 	linked := linkedExpenseID(r)
 	if linked == nil {
-		return expense.Add(), nil
+		return s.plainAdd(r), nil
 	}
-	parent, err := s.store.Get(r.Context(), *linked)
+	parent, err := s.loadExpense(r.Context(), *linked)
 	if errors.Is(err, store.ErrNotFound) {
 		return expense.Intent{}, errParentGone
 	}
@@ -506,7 +608,7 @@ func (s *Server) handleEditSave(w http.ResponseWriter, r *http.Request) {
 	if respondStoreErr(w, r, "updating "+kind, id, err) {
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, tabPath(in), http.StatusSeeOther)
 }
 
 // handleDelete removes a record, switching store method by the {kind} path
@@ -522,14 +624,32 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Load the record first: it decides which tab to return to, and keeps Carla's
+	// scope — she can't delete what she can't see.
+	var shared bool
 	op, del := "deleting expense", s.store.Delete
 	if kind == kindIncome {
 		op, del = "deleting income", s.store.DeleteIncome
+		_, sh, err := s.loadIncome(r.Context(), id)
+		if respondStoreErr(w, r, "loading income for delete", id, err) {
+			return
+		}
+		shared = sh
+	} else {
+		e, err := s.loadExpense(r.Context(), id)
+		if respondStoreErr(w, r, "loading expense for delete", id, err) {
+			return
+		}
+		shared = inSharedTab(e)
 	}
 	if respondStoreErr(w, r, op, id, del(r.Context(), id)) {
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	if shared {
+		http.Redirect(w, r, sharedPath, http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, ordinaryPath, http.StatusSeeOther)
 }
 
 // handlePaybackStart primes the quick-add box to log a payback against an
@@ -543,7 +663,7 @@ func (s *Server) handlePaybackStart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	e, err := s.store.Get(r.Context(), id)
+	e, err := s.loadExpense(r.Context(), id)
 	if respondStoreErr(w, r, "loading expense for payback", id, err) {
 		return
 	}
@@ -649,9 +769,12 @@ var saveGateMessages = map[expense.ParseError]string{
 	expense.ErrEmptyDescription: "needs a description",
 	expense.ErrTwoDateTokens:    "two dates",
 	expense.ErrTwoAccounts:      "two @accounts",
-	expense.ErrSplitOnIncome:    "cannot split an income",
 	expense.ErrMustBeIncome:     "an income must keep its + amount — delete it and add the expense instead",
-	expense.ErrMustBeExpense:    "an expense can't start with + — delete it and add the income instead",
+	expense.ErrMustBeExpense:    "an expense can't start with + or = — delete it and add that instead",
+
+	expense.ErrSettlementOutsideShared: "a = settlement belongs in the Shared tab",
+	expense.ErrIncomeInShared:          "no + incomes in the Shared tab",
+	expense.ErrMustBeSettlement:        "a settlement must keep its = amount — delete it and add the expense instead",
 }
 
 // errorMessages maps the save-gate violations of a line submitted under in to

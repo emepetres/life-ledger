@@ -70,6 +70,12 @@
         <h1>Life Ledger</h1>
         <div class="sub">Personal expense register</div>
       </div>
+      {{ if .ShowTabs }}
+      <nav class="tabs" aria-label="Tabs">
+        <a href="/"{{ if not .Shared }} class="active" aria-current="page"{{ end }}>Gastos</a>
+        <a href="/shared"{{ if .Shared }} class="active" aria-current="page"{{ end }}>Compartidos</a>
+      </nav>
+      {{ end }}
       <form class="logout" method="post" action="/logout">
         <button class="ghost" type="submit">Log out</button>
       </form>
@@ -82,11 +88,12 @@
           aria-label="Quick add"
         >
           <h2>
-            {{ if .Intent.IsEdit }}Edit {{ if .Intent.EditsIncome }}income{{ else
+            {{ if .Intent.IsEdit }}Edit {{ if .Intent.IsSettlement }}settlement{{ else if .Intent.EditsIncome }}income{{ else
             }}expense{{ end }}{{ else if .Intent.AddsPayback }}Quick add —
-            payback{{ else }}Quick add{{ end }}
+            payback{{ else if .Shared }}Quick add — shared{{ else }}Quick add{{ end }}
           </h2>
           <form method="post" action="{{ .FormAction }}" autocomplete="off">
+            {{ if .Shared }}<input type="hidden" name="tab" value="shared" />{{ end }}
             {{ if .Intent.IsEdit }}
             <!-- The edit target rides along with every /preview swap (htmx
                  posts the input's whole form) so the preview submits the line
@@ -103,7 +110,7 @@
               <span class="chip link"
                 >↩ payback → {{ .Intent.ParentDescription }}</span
               >
-              <a class="ghost cancel" href="/">Cancel</a>
+              <a class="ghost cancel" href="{{ .TabPath }}">Cancel</a>
             </div>
             {{ end }}
             <input
@@ -111,7 +118,7 @@
               type="text"
               name="raw"
               value="{{ .Raw }}"
-              placeholder="12.50 lunch @work *  -1"
+              placeholder="{{ if .Shared }}12.50 dinner @home  -1{{ else }}12.50 lunch @work  -1{{ end }}"
               aria-label="Expense entry"
               autofocus
               hx-post="/preview"
@@ -137,28 +144,17 @@
             <div id="preview">{{ template "preview" .Preview }}</div>
           </form>
           <p class="hint">
-            amount first · <b>@account</b> · <b>*</b> ½ split · <b>-N</b> days
-            ago · <b>DD/MM</b>
+            amount first · <b>@account</b> · <b>-N</b> days ago ·
+            <b>DD/MM</b>{{ if .Shared }} · <b>=</b> settle up (e.g.
+            <b>=40 bizum</b>){{ end }}
           </p>
-          <!-- Splittypie export: a plain GET so it works without JS; the server
-               answers with a text download, or this page with a notice. -->
-          <form
-            class="export"
-            method="get"
-            action="/export/splittypie"
-            aria-label="Export to splittypie"
-          >
-            <label
-              >from
-              <input type="date" name="from" value="{{ .ExportFrom }}" required
-            /></label>
-            <button class="ghost" type="submit">Export to splittypie</button>
-          </form>
         </section>
 
         <section class="list" aria-label="Expenses">
           {{ if .Notice }}
           <p class="notice" role="status">{{ .Notice }}</p>
+          {{ end }} {{ if .Shared }}
+          <p class="balance{{ if .Balance.Even }} even{{ end }}" role="status">{{ .Balance.Text }}</p>
           {{ end }} {{ template "list" .Groups }}
         </section>
       </div>
@@ -173,7 +169,20 @@
     <span>{{ .Label }}</span><span class="tot">{{ .Total }}</span>
   </div>
   {{ range .Rows }}
-  {{ if .IsIncome }}
+  {{ if .IsSettlement }}
+  <div class="row settlement">
+    <div class="amt">{{ .Amount }}</div>
+    <div class="desc-cell">
+      <div class="d">{{ .Description }}</div>
+      <div class="meta-m">
+        <span class="chip paidby">{{ .Direction }}</span> {{ template "account" . }}
+      </div>
+    </div>
+    <div class="cell-acct">{{ template "account" . }}</div>
+    <div class="cell-split"><span class="chip paidby">{{ .Direction }}</span></div>
+    {{ if .IsIncome }}{{ template "income-acts" . }}{{ else }}{{ template "expense-acts" . }}{{ end }}
+  </div>
+  {{ else if .IsIncome }}
   <div class="row income">
     <div class="amt">{{ .Amount }}</div>
     <div class="desc-cell">
@@ -197,14 +206,14 @@
     <div class="desc-cell">
       <div class="d">{{ .Description }}</div>
       <div class="meta-m">
-        {{ template "account" . }} {{ if .Split }}<span class="chip split"
-          >½ split</span
+        {{ template "account" . }} {{ if .PaidBy }}<span class="chip paidby"
+          >paid by {{ .PaidBy }}</span
         >{{ end }}
       </div>
     </div>
     <div class="cell-acct">{{ template "account" . }}</div>
     <div class="cell-split">
-      {{ if .Split }}<span class="badge split">½</span>{{ end }}
+      {{ if .PaidBy }}<span class="chip paidby">{{ .PaidBy }}</span>{{ end }}
     </div>
     {{ template "expense-acts" . }} {{ if .HasPaybacks }}
     <details class="pb-disclosure">
@@ -234,13 +243,13 @@
 </div>
 {{ end }} {{ end }} {{ end }} {{ define "expense-acts" }}
 <div class="acts">
-  <a
+  {{ if not .IsSettlement }}<a
     class="ghost icon-btn addpb"
     href="/payback/{{ .ID }}"
     aria-label="Add payback"
     title="Add payback"
     ><svg class="icon" aria-hidden="true"><use href="#icon-payback"></use></svg
-  ></a>
+  ></a>{{ end }}
   {{ if .Editable }}<a
     class="ghost icon-btn"
     href="/edit/expense/{{ .ID }}"
@@ -305,8 +314,8 @@
   >{{ end }}
   <span class="chip date">{{ .DateLabel }}</span>
   {{ if .Description }}<span class="chip desc">{{ .Description }}</span>{{ end
-  }} {{ template "account" . }} {{ if .Split }}<span class="chip split"
-    >½ split</span
+  }} {{ template "account" . }} {{ if .IsSettlement }}<span class="chip paidby"
+    >settlement</span
   >{{ end }} {{ end }}
 </div>
 {{ if .Errors }}
@@ -320,6 +329,6 @@
   <button class="primary" type="submit" {{ if .DisableSave }} disabled{{ end }}>
     {{ if .Editing }}Save changes{{ else }}Add{{ end }}
   </button>
-  {{ if .Editing }}<a class="ghost cancel" href="/">Cancel</a>{{ end }}
+  {{ if .Editing }}<a class="ghost cancel" href="{{ .TabPath }}">Cancel</a>{{ end }}
 </div>
 {{ end }}

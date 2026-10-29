@@ -78,9 +78,12 @@ func main() {
 
 // authConfig assembles the auth settings from the environment (ADR-0004):
 //
-//   - LIFELEDGER_PASSWORD_HASH — the bcrypt hash of the shared password, required.
+//   - LIFELEDGER_PASSWORD_HASH — the bcrypt hash of Javi's password, required.
 //     Generate one with `make hash-password`; the plaintext is never stored. A
 //     missing hash is fatal, so the app never boots unprotected.
+//   - LIFELEDGER_CARLA_PASSWORD_HASH — the bcrypt hash of Carla's password, who
+//     sees only the Shared tab. Optional: unset, only Javi can log in. Which
+//     password is typed decides who gets in.
 //   - LIFELEDGER_SECURE_COOKIE — sets the cookie's Secure flag. Off by default so
 //     local http://localhost QA works out of the box; production sets it to true.
 //   - LIFELEDGER_SESSION_KEY — the cookie signing secret; rotating it logs everyone
@@ -111,9 +114,10 @@ func authConfig() auth.Config {
 	}
 
 	return auth.Config{
-		PasswordHash:  []byte(hash),
-		SessionSecret: secret,
-		Secure:        secure,
+		PasswordHash:      []byte(hash),
+		CarlaPasswordHash: []byte(os.Getenv("LIFELEDGER_CARLA_PASSWORD_HASH")),
+		SessionSecret:     secret,
+		Secure:            secure,
 	}
 }
 

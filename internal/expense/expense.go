@@ -9,7 +9,7 @@ import (
 // entry is the unexported base shared by Expense and Income — the fields common
 // to both stored records (CONTEXT.md, ADR-0001, ADR-0009). It is embedded, never
 // held on its own: callers always work with a whole Expense or Income, so each
-// public type stays honest about the one field the other lacks (Split for an
+// public type stays honest about the one field the other lacks (Shared for an
 // expense, LinkedExpenseID for an income). Because the base is unexported,
 // records are built through NewExpense / NewIncome rather than a composite
 // literal.
@@ -37,32 +37,47 @@ type entry struct {
 	UpdatedAt   time.Time
 }
 
+// Payer is the User who paid a record (CONTEXT.md: Payer). Javi is the owner and
+// the only user of the ordinary tab, so it is also the default.
+type Payer string
+
+const (
+	Javi  Payer = "javi"
+	Carla Payer = "carla"
+)
+
 // Expense is a single stored spending record — what one line of the mobile note
 // becomes once saved on the server (CONTEXT.md, ADR-0001). It is the persisted
 // counterpart of a ParsedEntry with IsIncome false: the parser produces the
-// resolved fields, and the store fills in the identity and timestamps. Split is
-// a plain boolean set only by the explicit '*' marker; it is independent of
-// Account and the full Amount is always stored regardless.
+// resolved fields, and the store fills in the identity and timestamps. Shared is
+// a plain boolean set by registering the line in the Shared tab; it is
+// independent of Account and the full Amount is always stored regardless.
+// PaidBy is who paid it. Settlement marks a Javi -> Carla transfer: it is an
+// expense in Javi's real totals but is not a Shared expense and is not halved.
 type Expense struct {
 	entry
-	Split bool
+	Shared     bool
+	PaidBy     Payer
+	Settlement bool
 }
 
 // Income is a single stored credit record — a "money in" line marked with the
 // leading '+' sigil (ADR-0009). It reuses the whole entry shape but never
-// carries a '*' split; instead LinkedExpenseID ties a payback to the expense it
+// is Shared-free; instead LinkedExpenseID ties a payback to the expense it
 // nets down, nil for a standalone income. The link is set out-of-band, never
-// through the entry line, and is preserved across edits.
+// through the entry line, and is preserved across edits. Settlement marks a
+// Carla -> Javi transfer (the payer is implied: Carla).
 type Income struct {
 	entry
 	LinkedExpenseID *int64
+	Settlement      bool
 }
 
 // NewExpense assembles an Expense from its resolved fields, leaving the
 // store-owned identity (ID) and timestamps zero for the store to stamp. It
 // exists because entry is unexported — callers outside this package build
 // records here rather than with a composite literal.
-func NewExpense(date time.Time, amount int, description string, account *string, split bool, rawText string) *Expense {
+func NewExpense(date time.Time, amount int, description string, account *string, shared bool, rawText string) *Expense {
 	return &Expense{
 		entry: entry{
 			Date:        date,
@@ -71,7 +86,8 @@ func NewExpense(date time.Time, amount int, description string, account *string,
 			Account:     account,
 			RawText:     rawText,
 		},
-		Split: split,
+		Shared: shared,
+		PaidBy: Javi,
 	}
 }
 
@@ -92,23 +108,27 @@ func NewIncome(date time.Time, amount int, description string, account *string, 
 }
 
 // EntryLine renders an expense back into the free-text entry syntax (ADR-0002) —
-// the inverse of Parse. Layout is "<amount> <description> <DD/MM> [@account] [*]";
-// it appends '*' when the expense is split, over the shared middle that
-// entryLineParts builds. See entry.entryLineParts for the round-trip guarantee.
+// the inverse of Parse. Layout is "<amount> <description> <DD/MM> [@account]",
+// with the amount prefixed '=' for a Settlement. See entry.entryLineParts for
+// the round-trip guarantee.
 func (e Expense) EntryLine() string {
-	parts := e.entryLineParts(formatAmount(e.Amount))
-	if e.Split {
-		parts = append(parts, "*")
+	amount := formatAmount(e.Amount)
+	if e.Settlement {
+		amount = "=" + amount
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(e.entryLineParts(amount), " ")
 }
 
 // EntryLine renders an income back into the free-text entry syntax, prepending
-// the '+' income sigil to the amount and never emitting a '*' (an income can't
-// be split, ADR-0009). Layout is "+<amount> <description> <DD/MM> [@account]",
+// the '+' income sigil to the amount ('=' for a Settlement). Layout is
+// "+<amount> <description> <DD/MM> [@account]",
 // sharing entryLineParts with Expense so the common middle can't drift.
 func (i Income) EntryLine() string {
-	return strings.Join(i.entryLineParts("+"+formatAmount(i.Amount)), " ")
+	sigil := "+"
+	if i.Settlement {
+		sigil = "="
+	}
+	return strings.Join(i.entryLineParts(sigil+formatAmount(i.Amount)), " ")
 }
 
 // entryLineParts builds the canonical "<amount> <description> <DD/MM> [@account]"

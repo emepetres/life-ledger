@@ -109,6 +109,7 @@ password manager**; these are deployment copies.
 
 ```ini
 LIFELEDGER_PASSWORD_HASH=<bcrypt hash>
+LIFELEDGER_CARLA_PASSWORD_HASH=<bcrypt hash, optional: Carla's Shared-tab-only login, ADR-0015>
 LIFELEDGER_SESSION_KEY=<random key>
 ```
 

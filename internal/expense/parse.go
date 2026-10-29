@@ -27,10 +27,13 @@ type ParsedEntry struct {
 	HasAmount   bool
 	Description string
 	Account     string
-	Split       bool
 	IsIncome    bool
-	Date        time.Time
-	Errors      []ParseError
+	// IsSettlement flags the leading-'=' sigil: money handed from one User to the
+	// other to settle the Shared balance (CONTEXT.md: Settlement). Whether that is
+	// allowed is the Intent's call (see Submit).
+	IsSettlement bool
+	Date         time.Time
+	Errors       []ParseError
 }
 
 // OK reports whether the parse produced no save-gate errors, i.e. the entry can
@@ -52,19 +55,26 @@ const (
 	ErrTwoDateTokens
 	// ErrTwoAccounts: more than one @account token was given.
 	ErrTwoAccounts
-	// ErrSplitOnIncome: a '*' split marker was given on an income (ADR-0009); an
-	// income can never be split.
-	ErrSplitOnIncome
 	// ErrMustBeIncome: the Intent requires an income — adding a payback, or
 	// editing an income — but the line does not parse as one (ADR-0009
 	// amendments); it must keep its leading '+' amount. Never set by Parse
 	// itself — the Intent is out-of-band and Parse never sees it (see Submit).
 	ErrMustBeIncome
 	// ErrMustBeExpense: the Intent is editing an expense but the line parses as
-	// an income (leading '+'). An edit keeps the record's kind — it is refused,
-	// never converted (ADR-0009 amendment). Never set by Parse itself (see
-	// Submit).
+	// an income (leading '+') or a settlement (leading '='). An edit keeps the
+	// record's kind — it is refused, never converted (ADR-0009 amendment). Never
+	// set by Parse itself (see Submit).
 	ErrMustBeExpense
+	// ErrSettlementOutsideShared: a '=' settlement was entered in the ordinary
+	// tab; settlements only exist in the Shared tab. Never set by Parse itself.
+	ErrSettlementOutsideShared
+	// ErrIncomeInShared: a '+' income was entered in the Shared tab; there are no
+	// standalone incomes there (paybacks go through a shared expense's own
+	// button). Never set by Parse itself.
+	ErrIncomeInShared
+	// ErrMustBeSettlement: the Intent is editing a settlement but the line does
+	// not keep its leading '=' amount. Never set by Parse itself.
+	ErrMustBeSettlement
 )
 
 // parseErrorText holds the terse message for each save-gate violation. The
@@ -74,9 +84,12 @@ var parseErrorText = map[ParseError]string{
 	ErrEmptyDescription: "empty description",
 	ErrTwoDateTokens:    "two date tokens",
 	ErrTwoAccounts:      "two @account tokens",
-	ErrSplitOnIncome:    "* not allowed on an income",
 	ErrMustBeIncome:     "must be an income (leading +)",
-	ErrMustBeExpense:    "must be an expense (no leading +)",
+	ErrMustBeExpense:    "must be an expense (no leading + or =)",
+
+	ErrSettlementOutsideShared: "settlement only in the shared tab",
+	ErrIncomeInShared:          "no incomes in the shared tab",
+	ErrMustBeSettlement:        "must be a settlement (leading =)",
 }
 
 // Error implements the error interface so a ParseError can be surfaced directly.
@@ -96,6 +109,9 @@ var (
 	// e.g. "+30", "+12,50" (ADR-0009). Group 1 is the bare number to parse; the
 	// '+' marks the whole entry as an income.
 	incomeNumberRe = regexp.MustCompile(`^\+(\d+(?:[.,]\d+)?)$`)
+	// A settlement amount: a bare number with a leading '=', e.g. "=40"
+	// (CONTEXT.md: Settlement). Group 1 is the bare number to parse.
+	settlementNumberRe = regexp.MustCompile(`^=(\d+(?:[.,]\d+)?)$`)
 	// Relative date: "-N" days before today.
 	relativeDateRe = regexp.MustCompile(`^-(\d+)$`)
 	// Absolute date "DD/MM", no leading zeros required.
@@ -110,12 +126,12 @@ var (
 // Rules (ADR-0002, extended by ADR-0009): the amount is the first bare positive
 // number, with '.'/',' as the decimal separator into minor units; a '+'
 // immediately before that first number marks the entry as an income and is
-// stripped, while a leading '-' is always a date offset. The @account,
-// standalone '*' split, and date token float in any order after the amount;
+// stripped (a '=' likewise marks a settlement), while a leading '-' is always a
+// date offset. The @account and date token float in any order after the amount;
 // whatever text remains is the description. Extra bare numbers stay in the
 // description. An omitted date defaults to today. Save-gate errors are collected
-// for a missing amount, empty description, two date tokens, two @account tokens,
-// or a '*' on an income; everything else parses leniently.
+// for a missing amount, empty description, two date tokens, or two @account
+// tokens; everything else parses leniently.
 func Parse(raw string, today time.Time) ParsedEntry {
 	today = dateOnly(today)
 
@@ -152,6 +168,17 @@ func Parse(raw string, today time.Time) ParsedEntry {
 			} else {
 				descTokens = append(descTokens, tok)
 			}
+		case !p.HasAmount && settlementNumberRe.MatchString(tok):
+			// A '=' immediately before the first bare number marks a settlement;
+			// like '+', a non-positive value stays in the description.
+			num := settlementNumberRe.FindStringSubmatch(tok)[1]
+			if units := amountMinorUnits(num); units > 0 {
+				p.Amount = units
+				p.HasAmount = true
+				p.IsSettlement = true
+			} else {
+				descTokens = append(descTokens, tok)
+			}
 		case isDateToken(tok):
 			dateTokens = append(dateTokens, tok)
 		case len(tok) > 1 && tok[0] == '@':
@@ -159,8 +186,6 @@ func Parse(raw string, today time.Time) ParsedEntry {
 			if accountN == 1 {
 				p.Account = tok[1:]
 			}
-		case tok == "*":
-			p.Split = true
 		default:
 			descTokens = append(descTokens, tok)
 		}
@@ -189,9 +214,6 @@ func Parse(raw string, today time.Time) ParsedEntry {
 	}
 	if accountN > 1 {
 		p.Errors = append(p.Errors, ErrTwoAccounts)
-	}
-	if p.IsIncome && p.Split {
-		p.Errors = append(p.Errors, ErrSplitOnIncome)
 	}
 
 	return p

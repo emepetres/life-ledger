@@ -1,6 +1,6 @@
 # Access model / auth for single-user financial data
 
-**Status:** accepted; written for Azure Container Apps (gone, ADR-0010); the *HTTPS* row is superseded by [ADR-0013](0013-public-ingress-cloudflare-tunnel.md).
+**Status:** accepted; written for Azure Container Apps (gone, ADR-0010); the *HTTPS* row is superseded by [ADR-0013](0013-public-ingress-cloudflare-tunnel.md), and the *Credential* row (a single shared password) by [ADR-0015](0015-shared-tab-and-two-users.md) (one password per user, Javi and Carla).
 
 Life Ledger holds the user's **personal financial ledger on the public internet** and is effectively **single-user**. This ADR fixes how the app is protected. The stack is settled ([ADR: stack & architecture](https://github.com/emepetres/life-ledger/issues/2)): a **Go app on Azure Container Apps**, server-rendered `html/template` + htmx, SQLite — one deployable unit that must also **run locally for QA**. That context makes the auth options concrete.
 

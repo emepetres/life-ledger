@@ -148,8 +148,8 @@ func TestCreateAssignsIdentityAndRoundTrips(t *testing.T) {
 	if got.Description != "parking" {
 		t.Errorf("Description = %q, want %q", got.Description, "parking")
 	}
-	if !got.Split {
-		t.Error("Split = false, want true")
+	if !got.Shared {
+		t.Error("Shared = false, want true")
 	}
 	if got.Account == nil || *got.Account != "work" {
 		t.Errorf("Account = %v, want \"work\"", got.Account)
@@ -184,8 +184,8 @@ func TestOmittedAccountPersistsAsNull(t *testing.T) {
 	if got.Amount != 4999 {
 		t.Errorf("Amount = %d, want 4999 (full amount stored despite split)", got.Amount)
 	}
-	if !got.Split {
-		t.Error("Split = false, want true")
+	if !got.Shared {
+		t.Error("Shared = false, want true")
 	}
 }
 
