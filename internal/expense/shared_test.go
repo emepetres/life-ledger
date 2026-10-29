@@ -148,7 +148,7 @@ func TestSharedBalance(t *testing.T) {
 	standalone := expense.NewIncome(sharedToday, 99999, "nómina", nil, nil, "")
 
 	tests := []struct {
-		name       string
+		name          string
 		expenses      []expense.Expense
 		incomes       []expense.Income
 		forgivenesses []expense.Forgiveness
