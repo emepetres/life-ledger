@@ -35,8 +35,11 @@ internal/afk/        AFK subsystem: the pure decision core (Decide) that routes 
 internal/expense/    Domain core. The free-text parser (raw line -> ParsedEntry)
                      and the Expense and Income records — two public types over a
                      shared unexported `entry` base; an Income is an expense-but-
-                     negative, minus the `*` split marker, and a Payback is an
-                     Income linked to an Expense. The entry gate:
+                     negative, minus the Shared flag, and a Payback is an
+                     Income linked to an Expense. An Expense also carries who
+                     paid it (`PaidBy`) and whether it is a Settlement; the
+                     Shared balance (`SharedBalance`) is derived from them
+                     (ADR-0015). The entry gate:
                      Submit(Intent, raw, today) parses the line and applies the
                      Intent's kind rules (add, add payback, edit expense, edit
                      income — an edit keeps the record's kind; the edit window
@@ -58,18 +61,18 @@ internal/store/      Persistence. A repository over one SQLite file via the
                      was "created new" or "opened existing".
                      (ADR-0003, ADR-0009, ADR-0012)
 internal/auth/       Access control. The protective middleware, the HMAC-signed
-                     stateless session cookie, and a per-IP in-memory login rate
-                     limiter. (ADR-0004)
+                     stateless session cookie (carrying which of the two users
+                     logged in), and a per-IP in-memory login rate limiter.
+                     (ADR-0004, ADR-0015)
 internal/server/     HTTP surface. Routes and handlers for the home page,
                      add/preview, and one kind-qualified edit path plus delete
                      (/edit/{kind}/{id}, /delete/{kind}/{id}) — each rebuilds
                      the box's Intent (form hidden fields or route) and stores
                      whatever record expense.Submit returns, so preview and
                      save can't disagree; the pre-linked
-                     payback start (/payback/{expenseID}), the Splittypie export
-                     (GET /export/splittypie?from=YYYY-MM-DD — a text download of
-                     Split expenses as splittypie quick-add lines, at net cost;
-                     stateless), login/logout, and the
+                     payback start (/payback/{expenseID}), the two tabs (`/`
+                     ordinary, `/shared` shared + settlements + balance; Carla
+                     is confined to the latter), login/logout, and the
                      unauthenticated health check. view.go assembles the net-first,
                      day-grouped feed (net cost derived at render time; stored
                      amount stays full) into one discriminated rowView; renders
@@ -222,7 +225,8 @@ flowchart LR
 | --- | --- | --- |
 | `LIFELEDGER_ADDR` | default `:8080` | Listen address. |
 | `LIFELEDGER_DB_PATH` | unit → `/var/lib/life-ledger/expenses.db` | SQLite file on the guest's local disk. |
-| `LIFELEDGER_PASSWORD_HASH` | `app.env` | bcrypt hash of the shared password (required). |
+| `LIFELEDGER_PASSWORD_HASH` | `app.env` | bcrypt hash of Javi's password (required). |
+| `LIFELEDGER_CARLA_PASSWORD_HASH` | `app.env` | bcrypt hash of Carla's password (optional; she sees only the Shared tab, ADR-0015). |
 | `LIFELEDGER_SESSION_KEY` | `app.env` | Session-cookie signing secret (required in prod). |
 | `LIFELEDGER_SECURE_COOKIE` | unit → `true` | `Secure` flag on the session cookie. |
 | `TZ` | unit → `Europe/Madrid` | Selects the embedded zoneinfo so "today" is the local day. |

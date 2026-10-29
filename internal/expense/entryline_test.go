@@ -34,9 +34,18 @@ func TestEntryLine(t *testing.T) {
 			want: "7.60 coffee 9/1",
 		},
 		{
-			name: "account and split, fixed order",
+			name: "account after the date; Shared is not part of the line (the tab decides)",
 			e:    expense.NewExpense(day(2026, 7, 5), 1000, "dinner", ptr("work"), true, ""),
-			want: "10 dinner 5/7 @work *",
+			want: "10 dinner 5/7 @work",
+		},
+		{
+			name: "a settlement carries the = sigil",
+			e: func() *expense.Expense {
+				e := expense.NewExpense(day(2026, 7, 5), 4000, "devolución", nil, false, "")
+				e.Settlement = true
+				return e
+			}(),
+			want: "=40 devolución 5/7",
 		},
 		{
 			name: "empty account pointer omitted",
@@ -81,6 +90,15 @@ func TestIncomeEntryLine(t *testing.T) {
 			name: "a linked payback renders like any income (link is out-of-band)",
 			i:    expense.NewIncome(day(2026, 7, 5), 500, "lunch payback", nil, ptr64(7), ""),
 			want: "+5 lunch payback 5/7",
+		},
+		{
+			name: "a settlement income carries the = sigil, not +",
+			i: func() *expense.Income {
+				i := expense.NewIncome(day(2026, 7, 5), 4000, "devolución", nil, nil, "")
+				i.Settlement = true
+				return i
+			}(),
+			want: "=40 devolución 5/7",
 		},
 	}
 	for _, tt := range tests {
@@ -133,11 +151,11 @@ func TestEntryLineRoundTrips(t *testing.T) {
 				acc = *e.Account
 			}
 			if got.Amount != e.Amount || got.Description != e.Description ||
-				got.Account != acc || got.Split != e.Split || got.IsIncome || !got.Date.Equal(e.Date) {
-				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q split=%v income=%v date=%s\n want amount=%d desc=%q acc=%q split=%v income=false date=%s",
+				got.Account != acc || got.IsIncome || !got.Date.Equal(e.Date) {
+				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q income=%v date=%s\n want amount=%d desc=%q acc=%q income=false date=%s",
 					line, now.Format("2006-01-02"),
-					got.Amount, got.Description, got.Account, got.Split, got.IsIncome, got.Date.Format("2006-01-02"),
-					e.Amount, e.Description, acc, e.Split, e.Date.Format("2006-01-02"))
+					got.Amount, got.Description, got.Account, got.IsIncome, got.Date.Format("2006-01-02"),
+					e.Amount, e.Description, acc, e.Date.Format("2006-01-02"))
 			}
 		}
 	}
@@ -180,10 +198,10 @@ func TestIncomeEntryLineRoundTrips(t *testing.T) {
 				acc = *in.Account
 			}
 			if got.Amount != in.Amount || got.Description != in.Description ||
-				got.Account != acc || got.Split || !got.IsIncome || !got.Date.Equal(in.Date) {
-				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q split=%v income=%v date=%s\n want amount=%d desc=%q acc=%q split=false income=true date=%s",
+				got.Account != acc || !got.IsIncome || !got.Date.Equal(in.Date) {
+				t.Errorf("round-trip of %q at now=%s\n got  amount=%d desc=%q acc=%q income=%v date=%s\n want amount=%d desc=%q acc=%q income=true date=%s",
 					line, now.Format("2006-01-02"),
-					got.Amount, got.Description, got.Account, got.Split, got.IsIncome, got.Date.Format("2006-01-02"),
+					got.Amount, got.Description, got.Account, got.IsIncome, got.Date.Format("2006-01-02"),
 					in.Amount, in.Description, acc, in.Date.Format("2006-01-02"))
 			}
 		}

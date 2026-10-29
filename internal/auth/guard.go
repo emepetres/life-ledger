@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -30,9 +31,13 @@ var (
 
 // Config holds the deployment-supplied auth settings.
 type Config struct {
-	// PasswordHash is the bcrypt hash of the single shared password (never the
-	// plaintext), supplied via config/env.
+	// PasswordHash is the bcrypt hash of Javi's password (never the plaintext),
+	// supplied via config/env.
 	PasswordHash []byte
+	// CarlaPasswordHash is the bcrypt hash of Carla's password. Optional: without
+	// it only Javi can log in. Which password is entered decides who is logged
+	// in, so Carla can never pick Javi.
+	CarlaPasswordHash []byte
 	// SessionSecret signs the session cookie. Any length — it is hashed to a
 	// fixed-size HMAC key internally. Rotating it logs everyone out.
 	SessionSecret []byte
@@ -45,9 +50,10 @@ type Config struct {
 // runs the login (rate limit + bcrypt verify + issue cookie) and logout flows,
 // and provides middleware that gates the protected routes. It renders no HTML.
 type Guard struct {
-	hash     []byte
-	sessions *Sessions
-	limiter  *rateLimiter
+	hash      []byte
+	carlaHash []byte
+	sessions  *Sessions
+	limiter   *rateLimiter
 }
 
 // NewGuard validates the config and builds a Guard. It fails fast on a missing
@@ -61,14 +67,25 @@ func NewGuard(cfg Config) (*Guard, error) {
 	if _, err := bcrypt.Cost(cfg.PasswordHash); err != nil {
 		return nil, fmt.Errorf("auth: password hash is not a valid bcrypt hash: %w", err)
 	}
+	if len(cfg.CarlaPasswordHash) > 0 {
+		if _, err := bcrypt.Cost(cfg.CarlaPasswordHash); err != nil {
+			return nil, fmt.Errorf("auth: Carla's password hash is not a valid bcrypt hash: %w", err)
+		}
+	}
 	if len(cfg.SessionSecret) == 0 {
 		return nil, errors.New("auth: session secret is required")
 	}
 	return &Guard{
-		hash:     cfg.PasswordHash,
-		sessions: newSessions(cfg.SessionSecret, cfg.Secure),
-		limiter:  newRateLimiter(loginMaxAttempts, loginWindow),
+		hash:      cfg.PasswordHash,
+		carlaHash: cfg.CarlaPasswordHash,
+		sessions:  newSessions(cfg.SessionSecret, cfg.Secure),
+		limiter:   newRateLimiter(loginMaxAttempts, loginWindow),
 	}, nil
+}
+
+// User reports who the request's session belongs to, if it has a valid one.
+func (g *Guard) User(r *http.Request) (User, bool) {
+	return g.sessions.User(r)
 }
 
 // Authenticated reports whether the request carries a valid session.
@@ -79,17 +96,41 @@ func (g *Guard) Authenticated(r *http.Request) bool {
 // Login runs the login flow for a submitted password. It first spends a per-IP
 // rate-limit token (so a flood is turned away before the expensive bcrypt
 // compare); an exhausted budget returns ErrRateLimited. A mismatching password
-// returns ErrInvalidCredentials. On success it issues the session cookie and
-// returns nil. The constant-time compare comes from bcrypt.
-func (g *Guard) Login(w http.ResponseWriter, r *http.Request, password string) error {
+// returns ErrInvalidCredentials. On success it issues the session cookie for
+// whichever user the password belongs to and returns them. The constant-time
+// compare comes from bcrypt.
+func (g *Guard) Login(w http.ResponseWriter, r *http.Request, password string) (User, error) {
 	if !g.limiter.Allow(clientIP(r)) {
-		return ErrRateLimited
+		return "", ErrRateLimited
 	}
-	if err := bcrypt.CompareHashAndPassword(g.hash, []byte(password)); err != nil {
-		return ErrInvalidCredentials
+	user, ok := g.identify(password)
+	if !ok {
+		return "", ErrInvalidCredentials
 	}
-	g.sessions.Issue(w)
-	return nil
+	g.sessions.Issue(w, user)
+	return user, nil
+}
+
+// identify maps a password to the user it belongs to.
+func (g *Guard) identify(password string) (User, bool) {
+	if bcrypt.CompareHashAndPassword(g.hash, []byte(password)) == nil {
+		return Javi, true
+	}
+	if len(g.carlaHash) > 0 && bcrypt.CompareHashAndPassword(g.carlaHash, []byte(password)) == nil {
+		return Carla, true
+	}
+	return "", false
+}
+
+type userKey struct{}
+
+// UserFrom is who the request's session belongs to, as set by Middleware. A
+// context without one (an unguarded server) reads as Javi, the owner.
+func UserFrom(ctx context.Context) User {
+	if u, ok := ctx.Value(userKey{}).(User); ok {
+		return u
+	}
+	return Javi
 }
 
 // Logout clears the session cookie, ending the session.
@@ -107,12 +148,13 @@ func (g *Guard) Middleware(next http.Handler, skip func(*http.Request) bool) htt
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !g.sessions.Valid(r) {
+		user, ok := g.sessions.User(r)
+		if !ok {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		g.sessions.Issue(w) // slide the expiry forward on active use.
-		next.ServeHTTP(w, r)
+		g.sessions.Issue(w, user) // slide the expiry forward on active use.
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
 	})
 }
 

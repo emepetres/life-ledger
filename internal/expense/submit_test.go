@@ -11,7 +11,7 @@ import (
 // TestSubmitAdd pins the plain-add Intent: either kind is allowed and the
 // leading '+' decides which record the line becomes.
 func TestSubmitAdd(t *testing.T) {
-	got := expense.Submit(expense.Add(), "12.50 lunch @work *", today)
+	got := expense.Submit(expense.Add(), "12.50 lunch @work", today)
 
 	if !got.OK() {
 		t.Fatalf("OK() = false, errors %v", got.Parsed.Errors)
@@ -19,28 +19,28 @@ func TestSubmitAdd(t *testing.T) {
 	if got.Income != nil {
 		t.Fatalf("Income = %+v, want nil", got.Income)
 	}
-	want := expense.NewExpense(day(2026, 7, 21), 1250, "lunch", ptr("work"), true, "12.50 lunch @work *")
+	want := expense.NewExpense(day(2026, 7, 21), 1250, "lunch", ptr("work"), false, "12.50 lunch @work")
 	if !reflect.DeepEqual(got.Expense, want) {
 		t.Errorf("Expense = %+v, want %+v", got.Expense, want)
 	}
 }
 
-// TestSubmitAddPlainAndSplitIncome fills the plain-add row: a plain line is an
-// expense with no split, and a '+…*' line hits the existing split-on-income
-// gate and produces no record.
-func TestSubmitAddPlainAndSplitIncome(t *testing.T) {
+// TestSubmitAddPlainAndSettlement fills the plain-add row: a plain line is an
+// ordinary expense, and a '=' settlement is refused in the ordinary tab and
+// produces no record.
+func TestSubmitAddPlainAndSettlement(t *testing.T) {
 	plain := expense.Submit(expense.Add(), "30 lunch", today)
 	want := expense.NewExpense(day(2026, 7, 21), 3000, "lunch", nil, false, "30 lunch")
 	if !reflect.DeepEqual(plain.Expense, want) || plain.Income != nil {
 		t.Errorf("plain: Expense = %+v, Income = %+v; want Expense %+v", plain.Expense, plain.Income, want)
 	}
 
-	split := expense.Submit(expense.Add(), "+30 refund *", today)
-	if !reflect.DeepEqual(split.Parsed.Errors, []expense.ParseError{expense.ErrSplitOnIncome}) {
-		t.Errorf("+…*: Errors = %v, want [ErrSplitOnIncome]", split.Parsed.Errors)
+	settle := expense.Submit(expense.Add(), "=30 refund", today)
+	if !reflect.DeepEqual(settle.Parsed.Errors, []expense.ParseError{expense.ErrSettlementOutsideShared}) {
+		t.Errorf("=30: Errors = %v, want [ErrSettlementOutsideShared]", settle.Parsed.Errors)
 	}
-	if split.Expense != nil || split.Income != nil {
-		t.Errorf("+…*: a rejected line must produce no record; got Expense %+v, Income %+v", split.Expense, split.Income)
+	if settle.Expense != nil || settle.Income != nil {
+		t.Errorf("=30: a rejected line must produce no record; got Expense %+v, Income %+v", settle.Expense, settle.Income)
 	}
 }
 
@@ -79,14 +79,9 @@ func TestSubmitAddPayback(t *testing.T) {
 			wantErrs: []expense.ParseError{expense.ErrNoAmount, expense.ErrMustBeIncome},
 		},
 		{
-			name:     "plain split line: must be an income",
-			raw:      "30 Bob share *",
+			name:     "settlement line: must be an income",
+			raw:      "=30 Bob share",
 			wantErrs: []expense.ParseError{expense.ErrMustBeIncome},
-		},
-		{
-			name:     "split income: the existing split gate, no kind error",
-			raw:      "+30 Bob share *",
-			wantErrs: []expense.ParseError{expense.ErrSplitOnIncome},
 		},
 	}
 	for _, tt := range tests {
@@ -140,19 +135,10 @@ func TestSubmitEditExpense(t *testing.T) {
 		wantExpense *expense.Expense
 	}{
 		{
-			name: "plain line: updated in place, split dropped",
+			name: "plain line: updated in place",
 			raw:  "95 group dinner 18/7",
 			wantExpense: func() *expense.Expense {
 				e := expense.NewExpense(day(2026, 7, 18), 9500, "group dinner", nil, false, "95 group dinner 18/7")
-				e.ID = 7
-				return e
-			}(),
-		},
-		{
-			name: "split line: updated in place",
-			raw:  "95 group dinner 18/7 *",
-			wantExpense: func() *expense.Expense {
-				e := expense.NewExpense(day(2026, 7, 18), 9500, "group dinner", nil, true, "95 group dinner 18/7 *")
 				e.ID = 7
 				return e
 			}(),
@@ -163,9 +149,9 @@ func TestSubmitEditExpense(t *testing.T) {
 			wantErrs: []expense.ParseError{expense.ErrMustBeExpense},
 		},
 		{
-			name:     "split income line: both gates",
-			raw:      "+95 group dinner 18/7 *",
-			wantErrs: []expense.ParseError{expense.ErrSplitOnIncome, expense.ErrMustBeExpense},
+			name:     "settlement line: must stay an expense",
+			raw:      "=95 group dinner 18/7",
+			wantErrs: []expense.ParseError{expense.ErrMustBeExpense},
 		},
 	}
 	for _, tt := range tests {
@@ -222,34 +208,16 @@ func TestSubmitEditIncome(t *testing.T) {
 			wantErrs: []expense.ParseError{expense.ErrMustBeIncome},
 		},
 		{
-			name:     "payback, plain split line: must stay an income",
-			existing: payback,
-			raw:      "35 Bob share 20/7 *",
-			wantErrs: []expense.ParseError{expense.ErrMustBeIncome},
-		},
-		{
-			name:     "standalone, plain split line: must stay an income",
+			name:     "standalone, settlement line: must stay an income",
 			existing: standalone,
-			raw:      "35 refund 19/7 *",
+			raw:      "=35 refund 19/7",
 			wantErrs: []expense.ParseError{expense.ErrMustBeIncome},
-		},
-		{
-			name:     "standalone, split income line: split gate",
-			existing: standalone,
-			raw:      "+35 refund 19/7 *",
-			wantErrs: []expense.ParseError{expense.ErrSplitOnIncome},
 		},
 		{
 			name:     "payback, plain line: must stay an income",
 			existing: payback,
 			raw:      "35 Bob share 20/7",
 			wantErrs: []expense.ParseError{expense.ErrMustBeIncome},
-		},
-		{
-			name:     "payback, split income line: split gate",
-			existing: payback,
-			raw:      "+35 Bob share 20/7 *",
-			wantErrs: []expense.ParseError{expense.ErrSplitOnIncome},
 		},
 	}
 	for _, tt := range tests {

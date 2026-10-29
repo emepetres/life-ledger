@@ -9,7 +9,7 @@ for the full feature spec.
 
 Requires [Go](https://go.dev/dl/) 1.26+. No external services.
 
-The ledger is guarded by a single shared password (ADR-0004), enforced in-app and
+The ledger is guarded by a password per user — Javi's, and optionally Carla's, who sees only the Shared tab (ADR-0004, ADR-0015) — enforced in-app and
 identical locally and in production. So that the app boots, first generate a
 bcrypt hash of your chosen password and set it in the environment — the plaintext
 is never stored:
@@ -29,7 +29,8 @@ without a session; everything else requires one.
 | -------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LIFELEDGER_ADDR`          | `:8080`       | Listen address (`host:port` or `:port`).                                                                                                                                                                              |
 | `LIFELEDGER_DB_PATH`       | `./data/expenses.db` | SQLite database file; created (with its parent directory) if absent, opened as-is otherwise.                                                                                                                                            |
-| `LIFELEDGER_PASSWORD_HASH` | _(required)_  | bcrypt hash of the shared password (generate with `make hash-password`). The app won't boot without it.                                                                                                               |
+| `LIFELEDGER_CARLA_PASSWORD_HASH` | _(optional)_ | bcrypt hash of Carla's password. Unset, only Javi can log in. Carla sees only the Shared tab (ADR-0015). |
+| `LIFELEDGER_PASSWORD_HASH` | _(required)_  | bcrypt hash of Javi's password (generate with `make hash-password`). The app won't boot without it.                                                                                                               |
 | `LIFELEDGER_SECURE_COOKIE` | `false`       | Sets the session cookie's `Secure` flag. Leave off for local `http://localhost`; set `true` in production (HTTPS).                                                                                                    |
 | `LIFELEDGER_SESSION_KEY`   | _(ephemeral)_ | Session-cookie signing secret. **Required** when `LIFELEDGER_SECURE_COOKIE=true` (production). Left unset for local QA, a random key is generated per boot (sessions drop on restart). Rotating it logs everyone out. |
 

@@ -23,17 +23,17 @@ const (
 )
 
 // columns is the fixed column list every read selects, in scan order.
-const columns = "id, date, amount, description, split, account, raw_text, created_at, updated_at"
+const columns = "id, date, amount, description, split, paid_by, settlement, account, raw_text, created_at, updated_at"
 
 // Create inserts e as a new expense, assigning its ID and stamping CreatedAt and
-// UpdatedAt to the same instant. The full Amount is stored regardless of Split
+// UpdatedAt to the same instant. The full Amount is stored regardless of Shared
 // (ADR-0001); a nil Account is written as SQL NULL, never an empty string.
 func (s *Store) Create(ctx context.Context, e *expense.Expense) error {
 	now := s.now()
 	args := append(writeArgs(e), now.Format(tsLayout), now.Format(tsLayout))
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO expense (date, amount, description, split, account, raw_text, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO expense (date, amount, description, split, paid_by, settlement, account, raw_text, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		args...)
 	if err != nil {
 		return fmt.Errorf("inserting expense: %w", err)
@@ -95,7 +95,7 @@ func (s *Store) Update(ctx context.Context, e *expense.Expense) error {
 	args := append(writeArgs(e), now.Format(tsLayout), e.ID)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE expense
-		 SET date = ?, amount = ?, description = ?, split = ?, account = ?, raw_text = ?, updated_at = ?
+		 SET date = ?, amount = ?, description = ?, split = ?, paid_by = ?, settlement = ?, account = ?, raw_text = ?, updated_at = ?
 		 WHERE id = ?`,
 		args...)
 	if err != nil {
@@ -145,10 +145,12 @@ func scanExpense(sc scanner) (expense.Expense, error) {
 		createdStr string
 		updatedStr string
 		splitInt   int
+		settleInt  int
+		paidBy     string
 		account    sql.NullString
 	)
 	if err := sc.Scan(&e.ID, &dateStr, &e.Amount, &e.Description, &splitInt,
-		&account, &e.RawText, &createdStr, &updatedStr); err != nil {
+		&paidBy, &settleInt, &account, &e.RawText, &createdStr, &updatedStr); err != nil {
 		return expense.Expense{}, err
 	}
 
@@ -162,7 +164,9 @@ func scanExpense(sc scanner) (expense.Expense, error) {
 	if e.UpdatedAt, err = time.Parse(tsLayout, updatedStr); err != nil {
 		return expense.Expense{}, fmt.Errorf("parsing updated_at %q: %w", updatedStr, err)
 	}
-	e.Split = splitInt != 0
+	e.Shared = splitInt != 0
+	e.PaidBy = expense.Payer(paidBy)
+	e.Settlement = settleInt != 0
 	if account.Valid {
 		a := account.String
 		e.Account = &a
@@ -177,8 +181,18 @@ func scanExpense(sc scanner) (expense.Expense, error) {
 func writeArgs(e *expense.Expense) []any {
 	return []any{
 		e.Date.Format(dateLayout), e.Amount, e.Description,
-		boolToInt(e.Split), accountArg(e.Account), e.RawText,
+		boolToInt(e.Shared), string(paidByOrJavi(e.PaidBy)), boolToInt(e.Settlement),
+		accountArg(e.Account), e.RawText,
 	}
+}
+
+// paidByOrJavi defaults a record built without a payer to Javi, the owner and
+// the only user of the ordinary tab.
+func paidByOrJavi(p expense.Payer) expense.Payer {
+	if p == "" {
+		return expense.Javi
+	}
+	return p
 }
 
 // boolToInt maps a Go bool to the 0/1 integer SQLite stores for split.

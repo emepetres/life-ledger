@@ -13,7 +13,7 @@ import (
 // incomeColumns is the fixed column list every income read selects, in scan
 // order. It mirrors the expense columns minus split (an income is never split)
 // plus linked_expense_id (the payback discriminator, ADR-0009).
-const incomeColumns = "id, date, amount, description, account, raw_text, linked_expense_id, created_at, updated_at"
+const incomeColumns = "id, date, amount, description, account, raw_text, linked_expense_id, settlement, created_at, updated_at"
 
 // CreateIncome inserts i as a new income, assigning its ID and stamping
 // CreatedAt and UpdatedAt to the same instant. amount is the positive magnitude
@@ -23,8 +23,8 @@ func (s *Store) CreateIncome(ctx context.Context, i *expense.Income) error {
 	now := s.now()
 	args := append(writeArgsIncome(i), now.Format(tsLayout), now.Format(tsLayout))
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO income (date, amount, description, account, raw_text, linked_expense_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO income (date, amount, description, account, raw_text, linked_expense_id, settlement, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		args...)
 	if err != nil {
 		return fmt.Errorf("inserting income: %w", err)
@@ -89,10 +89,10 @@ func (s *Store) UpdateIncome(ctx context.Context, i *expense.Income) error {
 	now := s.now()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE income
-		 SET date = ?, amount = ?, description = ?, account = ?, raw_text = ?, updated_at = ?
+		 SET date = ?, amount = ?, description = ?, account = ?, raw_text = ?, settlement = ?, updated_at = ?
 		 WHERE id = ?`,
 		i.Date.Format(dateLayout), i.Amount, i.Description,
-		accountArg(i.Account), i.RawText, now.Format(tsLayout), i.ID)
+		accountArg(i.Account), i.RawText, boolToInt(i.Settlement), now.Format(tsLayout), i.ID)
 	if err != nil {
 		return fmt.Errorf("updating income %d: %w", i.ID, err)
 	}
@@ -137,9 +137,10 @@ func scanIncome(sc scanner) (expense.Income, error) {
 		updatedStr string
 		account    sql.NullString
 		linked     sql.NullInt64
+		settleInt  int
 	)
 	if err := sc.Scan(&i.ID, &dateStr, &i.Amount, &i.Description,
-		&account, &i.RawText, &linked, &createdStr, &updatedStr); err != nil {
+		&account, &i.RawText, &linked, &settleInt, &createdStr, &updatedStr); err != nil {
 		return expense.Income{}, err
 	}
 
@@ -157,6 +158,7 @@ func scanIncome(sc scanner) (expense.Income, error) {
 		a := account.String
 		i.Account = &a
 	}
+	i.Settlement = settleInt != 0
 	if linked.Valid {
 		id := linked.Int64
 		i.LinkedExpenseID = &id
@@ -172,7 +174,7 @@ func scanIncome(sc scanner) (expense.Income, error) {
 func writeArgsIncome(i *expense.Income) []any {
 	return []any{
 		i.Date.Format(dateLayout), i.Amount, i.Description,
-		accountArg(i.Account), i.RawText, linkedArg(i.LinkedExpenseID),
+		accountArg(i.Account), i.RawText, linkedArg(i.LinkedExpenseID), boolToInt(i.Settlement),
 	}
 }
 

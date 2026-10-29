@@ -44,13 +44,48 @@ type homeView struct {
 	Preview previewView
 	// Groups is the list, newest day first, each with its rows and day total.
 	Groups []dayGroup
-	// ExportFrom pre-fills the Splittypie export form's "from" date (YYYY-MM-DD):
-	// the day just exported from when echoing a notice, else the 1st of the
-	// current month.
-	ExportFrom string
-	// Notice is a one-line message shown above the list — set when a Splittypie
-	// export has nothing to download or its "from" date is invalid.
+	// Notice is a one-line message shown above the list — set when a payback's
+	// parent expense no longer exists.
 	Notice string
+	// Shared is true on the Shared tab (derived from Intent): the page lists the
+	// shared expenses and settlements, opens with the Balance, and its form posts
+	// a hidden tab=shared so /preview and /add know which tab the line belongs to.
+	Shared bool
+	// TabPath is where the page's own tab lives ("/" or "/shared"): the target of
+	// the cancel links and the active tab.
+	TabPath string
+	// ShowTabs gates the tab navigation: Carla has no ordinary tab to link to.
+	ShowTabs bool
+	// Balance is who owes whom, shown at the top of the Shared tab.
+	Balance balanceView
+}
+
+// balanceView is the Shared balance as shown: one sentence, and whether the two
+// users are even.
+type balanceView struct {
+	Text string
+	Even bool
+}
+
+// payerName is a Payer as shown to people.
+func payerName(p expense.Payer) string {
+	if p == expense.Carla {
+		return "Carla"
+	}
+	return "Javi"
+}
+
+// buildBalance words the Shared balance: "Carla debe €50.00 a Javi", or that the
+// two are even.
+func buildBalance(b expense.Balance) balanceView {
+	if b.Amount == 0 {
+		return balanceView{Text: "Estáis a mano", Even: true}
+	}
+	creditor := expense.Javi
+	if b.Debtor == expense.Javi {
+		creditor = expense.Carla
+	}
+	return balanceView{Text: fmt.Sprintf("%s debe %s a %s", payerName(b.Debtor), formatEuro(b.Amount), payerName(creditor))}
 }
 
 // previewView is the view model for the live-preview fragment: the resolved
@@ -65,9 +100,11 @@ type previewView struct {
 	// credit "−€X.XX" for a payback (IsPayback).
 	HasAmount bool
 	Amount    string
-	// IsIncome marks any '+' line, standalone or payback; an income never shows
-	// a split badge regardless of link state (ADR-0009).
+	// IsIncome marks any '+' line, standalone or payback (ADR-0009).
 	IsIncome bool
+	// IsSettlement marks a '=' line: money handed to the other user to settle the
+	// Shared balance.
+	IsSettlement bool
 	// IsPayback marks a '+' line typed while a payback link is active: the
 	// preview colours by link state — a payback stays green with the credit
 	// '−', while a standalone income (IsIncome but not IsPayback) previews blue
@@ -81,14 +118,14 @@ type previewView struct {
 	// Account is the "@tag" display, or "@personal" when omitted (AccountDefault).
 	Account        string
 	AccountDefault bool
-	// Split gates the "½ split" badge; true only when a standalone '*' is present.
-	Split bool
 	// Errors are the user-facing save-gate fix messages; empty means ready.
 	Errors []string
 	// DisableSave disables the save control when the entry is invalid. Set only
 	// for interactive (htmx) renders so a no-JS page keeps the control usable and
 	// leans on the server-side gate.
 	DisableSave bool
+	// TabPath is the tab the cancel link returns to ("/" or "/shared").
+	TabPath string
 	// Editing relabels the save control ("Save changes" vs "Add") and reveals the
 	// cancel affordance. It travels on the preview because the save control lives
 	// in the swapped-in fragment, so live /preview swaps during an edit must keep
@@ -107,23 +144,22 @@ type previewView struct {
 func buildPreview(raw string, in expense.Intent, sub expense.Submission, interactive bool) previewView {
 	editing := in.IsEdit()
 	if strings.TrimSpace(raw) == "" {
-		return previewView{Empty: true, DisableSave: interactive, Editing: editing}
+		return previewView{Empty: true, DisableSave: interactive, Editing: editing, TabPath: tabPath(in)}
 	}
 	p := sub.Parsed
 	account, isDefault := accountDisplay(p.Account)
 	v := previewView{
 		HasAmount:      p.HasAmount,
 		IsIncome:       p.IsIncome,
+		IsSettlement:   p.IsSettlement,
 		IsPayback:      p.IsIncome && in.IsPayback(),
 		DateLabel:      p.Date.Format(dayLabelLayout),
 		Description:    p.Description,
 		Account:        account,
 		AccountDefault: isDefault,
-		// An income is never split, so suppress the badge even if the line carried a
-		// stray '*' (which the save gate rejects anyway, ADR-0009).
-		Split:   p.Split && !p.IsIncome,
-		Errors:  errorMessages(p.Errors, in),
-		Editing: editing,
+		Errors:         errorMessages(p.Errors, in),
+		Editing:        editing,
+		TabPath:        tabPath(in),
 	}
 	if p.HasAmount {
 		if v.IsPayback {
@@ -182,7 +218,14 @@ type rowView struct {
 	Description    string
 	Account        string // "@work", or "@personal" when defaulted
 	AccountDefault bool
-	Split          bool
+	// PaidBy names who paid a Shared expense ("Carla"); empty on an ordinary one.
+	PaidBy string
+	// IsSettlement marks a transfer between the two users; Direction words it,
+	// e.g. "Javi → Carla". A settlement is an expense row when Javi pays and an
+	// income row (IsIncome) when Carla does, so its controls hit the matching
+	// kind-qualified endpoints.
+	IsSettlement bool
+	Direction    string
 	// Editable gates the row's Edit link: false for a record too old to edit
 	// (its date a year old or older), so the list only offers edits that can't
 	// shift the date (ADR-0008). Set for both expense and standalone-income rows.
@@ -275,12 +318,20 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 			Description:    e.Description,
 			Account:        accountLabel(e.Account),
 			AccountDefault: e.Account == nil,
-			Split:          e.Split,
 			Editable:       expense.Editable(e.Date, now),
+		}
+		if e.Shared {
+			row.PaidBy = payerName(e.PaidBy)
 		}
 		// Net cost is derived here, never stored (ADR-0001 untouched): the row's
 		// contribution to its day total is the full paid amount, less its paybacks.
 		cost := e.Amount
+		if e.Settlement {
+			// A settlement moves money between the users; it is not a cost.
+			row.IsSettlement = true
+			row.Direction = settlementDirection(expense.Javi)
+			cost = 0
+		}
 		if pbs := paybacks[e.ID]; len(pbs) > 0 {
 			sum := 0
 			views := make([]paybackView, 0, len(pbs))
@@ -314,13 +365,19 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 		})
 	}
 	for _, i := range standalone {
+		var direction string
+		if i.Settlement {
+			direction = settlementDirection(expense.Carla)
+		}
 		feed = append(feed, feedItem{
 			date:      i.Date,
 			createdAt: i.CreatedAt,
 			cost:      0, // a standalone income does not move the day total
 			row: rowView{
-				ID:       i.ID,
-				IsIncome: true,
+				ID:           i.ID,
+				IsIncome:     true,
+				IsSettlement: i.Settlement,
+				Direction:    direction,
 				// Plain formatEuro, not formatCredit: a standalone income has no leading
 				// '−' (ADR-0009 amendment, #59/#63) — the blue colour comes from the
 				// .row.income CSS rule, keyed off IsIncome, not from the amount string.
@@ -363,6 +420,49 @@ func groupByDay(expenses []expense.Expense, incomes []expense.Income, now time.T
 	}
 	return groups
 }
+
+// settlementDirection words a settlement by who pays whom: "Javi → Carla".
+func settlementDirection(payer expense.Payer) string {
+	if payer == expense.Carla {
+		return "Carla → Javi"
+	}
+	return "Javi → Carla"
+}
+
+// tabRecords picks what a tab lists from every stored record. The Shared tab
+// shows the shared expenses, the settlements (both the expense and income kind),
+// and the paybacks of a shared expense; the ordinary tab shows the rest — the
+// non-shared, non-settlement expenses and the incomes outside settlements and
+// shared paybacks. A payback follows its parent expense.
+func tabRecords(expenses []expense.Expense, incomes []expense.Income, shared bool) ([]expense.Expense, []expense.Income) {
+	parentShared := make(map[int64]bool, len(expenses))
+	var es []expense.Expense
+	for _, e := range expenses {
+		parentShared[e.ID] = e.Shared
+		if inSharedTab(e) == shared {
+			es = append(es, e)
+		}
+	}
+	var is []expense.Income
+	for _, i := range incomes {
+		switch {
+		case i.Settlement:
+			if shared {
+				is = append(is, i)
+			}
+		case i.LinkedExpenseID != nil:
+			if parentShared[*i.LinkedExpenseID] == shared {
+				is = append(is, i)
+			}
+		case !shared:
+			is = append(is, i)
+		}
+	}
+	return es, is
+}
+
+// inSharedTab reports whether an expense belongs to the Shared tab.
+func inSharedTab(e expense.Expense) bool { return e.Shared || e.Settlement }
 
 // bucketIncomes is the in-memory stitch behind "two bulk reads, one stitch"
 // (ADR-0009): it buckets the incomes by their linked_expense_id, so each expense

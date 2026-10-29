@@ -11,7 +11,7 @@ import (
 func issuedCookie(t *testing.T, s *Sessions) *http.Cookie {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	s.Issue(rec)
+	s.Issue(rec, Javi)
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("Issue set %d cookies, want 1", len(cookies))
@@ -105,5 +105,23 @@ func TestSessionClearExpiresCookie(t *testing.T) {
 	// The cleared cookie must not validate as a live session.
 	if s.Valid(requestWith(cookies[0])) {
 		t.Error("a cleared cookie must not be a valid session")
+	}
+}
+
+// Cookies issued before users existed carried the payload "1" (the one shared
+// password was Javi's): they must keep working, as Javi — not log him out on
+// deploy — while an unknown payload is rejected.
+func TestSessionLegacyCookieReadsAsJavi(t *testing.T) {
+	s := newSessions([]byte("secret"), false)
+	legacy, err := s.codec.Encode(cookieName, legacySessionValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := s.User(requestWith(&http.Cookie{Name: cookieName, Value: legacy})); !ok || u != Javi {
+		t.Errorf("legacy cookie: user %q ok=%v, want javi", u, ok)
+	}
+	bogus, _ := s.codec.Encode(cookieName, "admin")
+	if _, ok := s.User(requestWith(&http.Cookie{Name: cookieName, Value: bogus})); ok {
+		t.Error("a validly signed cookie with an unknown payload must be rejected")
 	}
 }

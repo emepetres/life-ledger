@@ -27,16 +27,16 @@ func postPreview(t *testing.T, ts *httptest.Server, raw string) (*http.Response,
 
 // AC: the preview echoes every resolved field — the resolved date as a real
 // date (never the "-N" token), the formatted amount, the description, the
-// account pill, and the ½ split badge — for a fully-marked entry.
+// account pill — for a fully-marked entry.
 func TestPreviewEchoesResolvedFields(t *testing.T) {
 	ts := newTestServer(t)
 
 	// testToday is 2026-07-21 (Tue); "-1" resolves to 2026-07-20 (Mon).
-	resp, body := postPreview(t, ts, "12.50 lunch @work * -1")
+	resp, body := postPreview(t, ts, "12.50 lunch @work -1")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /preview status = %d, want 200", resp.StatusCode)
 	}
-	for _, want := range []string{"€12.50", "Mon 20 Jul", "lunch", "@work", "½ split"} {
+	for _, want := range []string{"€12.50", "Mon 20 Jul", "lunch", "@work"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("preview missing %q; got:\n%s", want, body)
 		}
@@ -62,18 +62,6 @@ func TestPreviewDefaultsDateAndPersonalAccount(t *testing.T) {
 	}
 	if !strings.Contains(body, "@personal") {
 		t.Errorf("omitted account should show @personal default; got:\n%s", body)
-	}
-}
-
-// AC: the ½ split badge appears only when a standalone '*' is present.
-func TestPreviewSplitBadgeOnlyWhenStar(t *testing.T) {
-	ts := newTestServer(t)
-
-	if _, body := postPreview(t, ts, "5 coffee"); strings.Contains(body, "½") {
-		t.Errorf("no '*' should mean no ½ badge; got:\n%s", body)
-	}
-	if _, body := postPreview(t, ts, "5 coffee *"); !strings.Contains(body, "½ split") {
-		t.Errorf("a '*' should surface the ½ split badge; got:\n%s", body)
 	}
 }
 

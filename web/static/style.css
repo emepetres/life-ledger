@@ -55,6 +55,13 @@ h1 { font-size: 18px; margin: 0; }
 }
 .app-header .sub { color: var(--muted); font-size: 13px; }
 .app-header .logout { margin-left: auto; }
+/* Tab navigation (Gastos / Compartidos): Javi only — Carla has just the one tab. */
+.app-header .tabs { display: flex; gap: 4px; margin-left: 24px; }
+.app-header .tabs a {
+  padding: 6px 14px; border-radius: 999px; text-decoration: none;
+  color: var(--muted); font-size: 14px; font-weight: 600;
+}
+.app-header .tabs a.active { background: var(--accent-soft); color: var(--amount); }
 
 .wrap { max-width: 1000px; margin: 0 auto; padding: 0 20px 40px; }
 
@@ -131,6 +138,15 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
 .badge.split { background: var(--split-soft); color: var(--split); }
 .chip.split { background: var(--split-soft); color: var(--split); font-weight: 600; }
+/* Who paid a shared expense, and the direction of a settlement. */
+.chip.paidby { background: var(--split-soft); color: var(--split); font-weight: 600; }
+/* The Shared tab's headline: who owes whom. */
+.balance {
+  margin: 0 0 14px; padding: 12px 16px; border-radius: 10px;
+  background: var(--split-soft); color: var(--split);
+  font-size: 17px; font-weight: 700;
+}
+.balance.even { background: var(--credit-soft); color: var(--credit); }
 
 /* ---- day-grouped list ---- */
 .daygroup { margin-top: 16px; }
@@ -157,6 +173,7 @@ button.primary:disabled { background: #c9ccd1; cursor: not-allowed; }
    payback or an over-repaid net, which stay credit green (ADR-0009 amendment,
    #59/#63). */
 .row.income .amt { color: var(--income); }
+.row.settlement .amt { color: var(--muted); }
 .desc-cell { min-width: 0; }
 .desc-cell .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .meta-m { display: none; gap: 6px; margin-top: 4px; align-items: center; } /* mobile-only */

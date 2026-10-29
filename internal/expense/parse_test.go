@@ -26,8 +26,8 @@ func TestParse(t *testing.T) {
 		wantHasAmt   bool
 		wantDesc     string
 		wantAccount  string
-		wantSplit    bool
 		wantIsIncome bool
+		wantIsSettle bool
 		wantDate     time.Time
 		wantErrs     []expense.ParseError
 	}{
@@ -117,14 +117,14 @@ func TestParse(t *testing.T) {
 			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch", wantAccount: "credit-card", wantDate: day(2026, 7, 21),
 		},
 		{
-			name:       "standalone star sets split",
+			name:       "a standalone star is no marker any more: it stays in the description",
 			raw:        "10 lunch *",
-			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch", wantSplit: true, wantDate: day(2026, 7, 21),
+			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch *", wantDate: day(2026, 7, 21),
 		},
 		{
 			name:       "markers float in arbitrary order",
-			raw:        "10 @work lunch * -1",
-			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch", wantAccount: "work", wantSplit: true, wantDate: day(2026, 7, 20),
+			raw:        "10 @work lunch -1",
+			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch", wantAccount: "work", wantDate: day(2026, 7, 20),
 		},
 		{
 			name:       "multiple bare numbers: first is amount, rest stay in description",
@@ -167,8 +167,8 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:       "empty description error with only markers left",
-			raw:        "12.50 @work *",
-			wantAmount: 1250, wantHasAmt: true, wantDesc: "", wantAccount: "work", wantSplit: true, wantDate: day(2026, 7, 21),
+			raw:        "12.50 @work -1",
+			wantAmount: 1250, wantHasAmt: true, wantDesc: "", wantAccount: "work", wantDate: day(2026, 7, 20),
 			wantErrs: []expense.ParseError{expense.ErrEmptyDescription},
 		},
 		{
@@ -200,10 +200,19 @@ func TestParse(t *testing.T) {
 			wantAmount: 1250, wantHasAmt: true, wantDesc: "x", wantAccount: "bbva", wantIsIncome: true, wantDate: day(2026, 7, 19),
 		},
 		{
-			name:       "star on an income is a save-gate violation",
-			raw:        "+30 lunch *",
-			wantAmount: 3000, wantHasAmt: true, wantDesc: "lunch", wantSplit: true, wantIsIncome: true, wantDate: day(2026, 7, 21),
-			wantErrs: []expense.ParseError{expense.ErrSplitOnIncome},
+			name:       "leading = before the first number marks a settlement",
+			raw:        "=40 devolución",
+			wantAmount: 4000, wantHasAmt: true, wantDesc: "devolución", wantIsSettle: true, wantDate: day(2026, 7, 21),
+		},
+		{
+			name:       "settlement with comma decimal, floating account and date offset",
+			raw:        "=12,50 x @bbva -2",
+			wantAmount: 1250, wantHasAmt: true, wantDesc: "x", wantAccount: "bbva", wantIsSettle: true, wantDate: day(2026, 7, 19),
+		},
+		{
+			name:       "equals on a non-first number stays in the description",
+			raw:        "10 lunch =5",
+			wantAmount: 1000, wantHasAmt: true, wantDesc: "lunch =5", wantDate: day(2026, 7, 21),
 		},
 		{
 			name:       "plus only marks the first bare number, not a later one",
@@ -238,11 +247,11 @@ func TestParse(t *testing.T) {
 			if got.Account != tt.wantAccount {
 				t.Errorf("Account = %q, want %q", got.Account, tt.wantAccount)
 			}
-			if got.Split != tt.wantSplit {
-				t.Errorf("Split = %v, want %v", got.Split, tt.wantSplit)
-			}
 			if got.IsIncome != tt.wantIsIncome {
 				t.Errorf("IsIncome = %v, want %v", got.IsIncome, tt.wantIsIncome)
+			}
+			if got.IsSettlement != tt.wantIsSettle {
+				t.Errorf("IsSettlement = %v, want %v", got.IsSettlement, tt.wantIsSettle)
 			}
 			if !got.Date.Equal(tt.wantDate) {
 				t.Errorf("Date = %s, want %s", got.Date.Format("2006-01-02"), tt.wantDate.Format("2006-01-02"))

@@ -18,6 +18,15 @@ type Intent struct {
 	linkedExpenseID *int64
 	// parentDescription names the parent expense when adding a payback.
 	parentDescription string
+	// shared is true when the line is entered in (or, when editing, belongs to)
+	// the Shared tab: an add becomes a Shared expense or a Settlement, and '+'
+	// incomes are refused.
+	shared bool
+	// settlement is true when editing an existing Settlement, which must stay one.
+	settlement bool
+	// payer is who pays what the line becomes: the typist when adding in the
+	// Shared tab, the record's own payer when editing. Empty means Javi.
+	payer Payer
 }
 
 // intentKind discriminates the four Intents.
@@ -34,12 +43,39 @@ const (
 // decides (ADR-0009).
 func Add() Intent { return Intent{kind: intentAdd} }
 
+// AddShared is the Intent of adding a line in the Shared tab as payer: it
+// becomes a Shared expense paid by payer, or — with a leading '=' — a Settlement
+// paid by payer. A '+' income is refused there.
+func AddShared(payer Payer) Intent { return Intent{kind: intentAdd, shared: true, payer: payer} }
+
+// IsShared reports whether the Intent belongs to the Shared tab.
+func (in Intent) IsShared() bool { return in.shared }
+
+// WithSharedTab returns the Intent placed in (or out of) the Shared tab. Edit
+// Intents learn their tab from the record they target, but a payback's tab is its
+// parent's, which only the caller that loaded the parent knows.
+func (in Intent) WithSharedTab(shared bool) Intent {
+	in.shared = shared
+	return in
+}
+
+// IsSettlement reports whether the Intent edits an existing Settlement.
+func (in Intent) IsSettlement() bool { return in.settlement }
+
+// Payer is who pays what a line submitted under the Intent becomes.
+func (in Intent) Payer() Payer {
+	if in.payer == "" {
+		return Javi
+	}
+	return in.payer
+}
+
 // AddPayback is the Intent of logging a payback against parent: the line must be
 // an income, and the saved Income is linked to parent out-of-band — the link is
 // never expressible in the entry text (ADR-0009 amendment, #62).
 func AddPayback(parent Expense) Intent {
 	id := parent.ID
-	return Intent{kind: intentAddPayback, linkedExpenseID: &id, parentDescription: parent.Description}
+	return Intent{kind: intentAddPayback, linkedExpenseID: &id, parentDescription: parent.Description, shared: parent.Shared}
 }
 
 // EditExpense is the Intent of editing existing as of now. The line must stay an
@@ -50,7 +86,11 @@ func EditExpense(existing Expense, now time.Time) (in Intent, ok bool) {
 	if !Editable(existing.Date, now) {
 		return Intent{}, false
 	}
-	return Intent{kind: intentEditExpense, id: existing.ID}, true
+	return Intent{
+		kind: intentEditExpense, id: existing.ID,
+		shared: existing.Shared || existing.Settlement, settlement: existing.Settlement,
+		payer: existing.PaidBy,
+	}, true
 }
 
 // EditIncome is the Intent of editing existing — a standalone income or a
@@ -62,7 +102,12 @@ func EditIncome(existing Income, now time.Time) (in Intent, ok bool) {
 	if !Editable(existing.Date, now) {
 		return Intent{}, false
 	}
-	return Intent{kind: intentEditIncome, id: existing.ID, linkedExpenseID: existing.LinkedExpenseID}, true
+	in = Intent{kind: intentEditIncome, id: existing.ID, linkedExpenseID: existing.LinkedExpenseID}
+	if existing.Settlement {
+		// A settlement income is always Carla paying Javi.
+		in.shared, in.settlement, in.payer = true, true, Carla
+	}
+	return in, true
 }
 
 // IsEdit reports whether the Intent edits an existing record rather than adding
@@ -117,9 +162,15 @@ func (s Submission) OK() bool { return s.Parsed.OK() }
 func Submit(in Intent, raw string, today time.Time) Submission {
 	p := Parse(raw, today)
 	switch {
-	case in.mustBeIncome() && !p.IsIncome:
+	case in.kind == intentAdd && !in.shared && p.IsSettlement:
+		p.Errors = append(p.Errors, ErrSettlementOutsideShared)
+	case in.kind == intentAdd && in.shared && p.IsIncome:
+		p.Errors = append(p.Errors, ErrIncomeInShared)
+	case in.settlement && !p.IsSettlement:
+		p.Errors = append(p.Errors, ErrMustBeSettlement)
+	case in.mustBeIncome() && !in.settlement && !p.IsIncome:
 		p.Errors = append(p.Errors, ErrMustBeIncome)
-	case in.kind == intentEditExpense && p.IsIncome:
+	case in.kind == intentEditExpense && !in.settlement && (p.IsIncome || p.IsSettlement):
 		p.Errors = append(p.Errors, ErrMustBeExpense)
 	}
 	s := Submission{Parsed: p}
@@ -127,6 +178,20 @@ func Submit(in Intent, raw string, today time.Time) Submission {
 		return s
 	}
 	account := accountPtr(p.Account)
+	if p.IsSettlement {
+		// A settlement is paid by the typist (or, on edit, its existing payer):
+		// Carla's is an income in Javi's real totals, Javi's an expense.
+		if in.Payer() == Carla {
+			s.Income = NewIncome(p.Date, p.Amount, p.Description, account, nil, raw)
+			s.Income.Settlement = true
+			s.Income.ID = in.id
+			return s
+		}
+		s.Expense = NewExpense(p.Date, p.Amount, p.Description, account, false, raw)
+		s.Expense.Settlement = true
+		s.Expense.ID = in.id
+		return s
+	}
 	if p.IsIncome {
 		var linked *int64
 		if in.linkedExpenseID != nil {
@@ -137,7 +202,8 @@ func Submit(in Intent, raw string, today time.Time) Submission {
 		s.Income.ID = in.id
 		return s
 	}
-	s.Expense = NewExpense(p.Date, p.Amount, p.Description, account, p.Split, raw)
+	s.Expense = NewExpense(p.Date, p.Amount, p.Description, account, in.shared, raw)
+	s.Expense.PaidBy = in.Payer()
 	s.Expense.ID = in.id
 	return s
 }

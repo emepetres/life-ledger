@@ -5,16 +5,32 @@ Personal expense register. The first slice replaces a manual mobile text note �
 ## Language
 
 **Expense**:
-A single stored spending record — what one line of the mobile note becomes once saved on the server. Carries a date, an amount, a description, and optional markers.
+A single stored spending record — what one line of the mobile note becomes once saved on the server. Carries a date, an amount, a description, a **Payer**, and optional markers.
 _Avoid_: Transaction, entry, movement
 
 **Amount**:
 The full amount actually paid for an expense, held as an integer number of minor units (e.g. cents). The display layer formats it for humans.
 _Avoid_: Price, cost, total
 
-**Split** (marker):
-A boolean marker on an expense meaning it is also registered in a separate partner-split app, so only half is really the user's. The expense's Amount still records the full amount paid; the halving math is a separate, later effort. Set only by the explicit `*` marker in the entry — never inferred from the Account.
-_Avoid_: Shared, halved, half
+**Shared** (flag):
+A boolean on an expense meaning it is split 50/50 between the two **Users**, whatever the **Payer**. Amount still records the full amount paid; each User's half is derived at display time. Set by registering the line in the Shared tab — there is no `*` marker. Shared expenses are listed only in the Shared tab; ordinary ones only in the main tab.
+_Avoid_: Split, halved, half
+
+**User**:
+One of the two people the app knows: **Javi** (the owner, sees both tabs) and **Carla** (the partner, sees only the Shared tab). Identified by which password was entered at login, carried in the signed session cookie.
+_Avoid_: Account (taken), member, partner
+
+**Payer**:
+The User who paid a shared expense (`paid_by`): whoever registered it, correctable on edit. Blank-defaults to Javi, so every expense that predates the Shared tab reads as paid by Javi.
+_Avoid_: Owner, author
+
+**Shared balance** (derived):
+Who owes whom, and how much, shown at the top of the Shared tab ("Javi owes Carla 23,40 €", or "Estáis a mano"). Never stored: for each shared expense, the Payer is owed half its **Net cost** by the other User; **Settlements** then move it back. Paybacks on a shared expense are assumed received by its Payer.
+_Avoid_: Debt, total owed
+
+**Settlement**:
+A transfer of money between the two Users to settle the Shared balance, entered in the Shared tab with a leading `=` (`=40 devolución`), paid by whoever types it. Not a Shared expense and not halved: it only moves the balance. Javi → Carla is stored as an expense, Carla → Javi as an income, and both count in Javi's real totals but are listed only in the Shared tab.
+_Avoid_: Repayment, payback (that is linked to an Expense)
 
 **Account** (tag):
 An optional free-text tag naming which account or card an expense was paid from (e.g. personal, work, common, home). Blank when omitted, in which case "personal" is assumed at display time; may be filled in later when the expense is reviewed. A pure label in this slice — it carries no split or halving behavior.
@@ -25,7 +41,7 @@ An expense rendered back into entry syntax from its stored fields — the invers
 _Avoid_: Raw text, verbatim line
 
 **Income**:
-A stored record that is structurally an Expense but negative — it subtracts from total expenses. Reuses the expense entry/edit path (the free-text parser, the record shape, the canonical entry line, the edit/delete flow); the one thing it lacks is the `*` split marker (an income is never split). Entered with a leading `+` on the amount (`+30 …`). Lives in its own `income` table. A **standalone** income (not linked to an expense — see Payback) displays **blue with no leading `−`**: money-in that nets against nothing on screen reads apart from a payback (ADR-0009 [#59](https://github.com/emepetres/life-ledger/issues/59) amendment).
+A stored record that is structurally an Expense but negative — it subtracts from total expenses. Reuses the expense entry/edit path (the free-text parser, the record shape, the canonical entry line, the edit/delete flow); the one thing it lacks is the Shared flag (an income is never shared; only a Carla → Javi **Settlement** is an income tied to the Shared tab). Entered with a leading `+` on the amount (`+30 …`). Lives in its own `income` table. A **standalone** income (not linked to an expense — see Payback) displays **blue with no leading `−`**: money-in that nets against nothing on screen reads apart from a payback (ADR-0009 [#59](https://github.com/emepetres/life-ledger/issues/59) amendment).
 _Avoid_: Credit, refund, deposit
 
 **Payback**:
@@ -39,7 +55,3 @@ _Avoid_: Mode, action, context
 **Net cost** (derived):
 An expense's full Amount minus the sum of its linked paybacks — never stored, computed at display time. May be negative when over-repaid (rendered green). The list surfaces net cost as the headline figure while the stored Amount stays the full amount paid.
 _Avoid_: Balance, remainder, owed
-
-**Splittypie export**:
-A one-off text file listing every **Split** expense dated from a chosen "from" day (inclusive) through today, one splittypie quick-add line per expense (`<YYYY-MM-DD> <amount> <description>`), oldest first, to be retyped by hand into the partner-split app. Each line carries the expense's **Net cost**, not its full Amount; an expense whose net cost is zero or less is left out. Descriptions are cut to splittypie's 50-character limit; account and `*` markers are not carried over. Nothing is remembered about what was exported — re-exporting an overlapping range repeats lines.
-_Avoid_: Sync, splittypie import, share
